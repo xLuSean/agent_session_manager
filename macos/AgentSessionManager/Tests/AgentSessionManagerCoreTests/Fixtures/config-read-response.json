@@ -1,0 +1,11 @@
+{
+  "config": {
+    "model": "test-model",
+    "projects": {
+      "/Users/example/Trusted": {
+        "trust_level": "trusted"
+      }
+    }
+  },
+  "origins": {}
+}

@@ -1,0 +1,15 @@
+#!/bin/zsh
+
+set -euo pipefail
+
+HOOK_DIRECTORY=${0:A:h}
+REPOSITORY_ROOT=${HOOK_DIRECTORY:h}
+VERIFY_SCRIPT="$REPOSITORY_ROOT/scripts/verify.sh"
+
+if [[ ! -x "$VERIFY_SCRIPT" ]]; then
+    print -u2 "Verification script is missing or not executable: $VERIFY_SCRIPT"
+    exit 1
+fi
+
+print "Running Agent Session Manager pre-commit verification..."
+exec "$VERIFY_SCRIPT"

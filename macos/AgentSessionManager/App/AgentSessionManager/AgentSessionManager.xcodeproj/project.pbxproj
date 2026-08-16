@@ -1,0 +1,442 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* AgentSessionManagerCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* AgentSessionManagerCore */; };
+		A10000000000000000000011 /* AgentSessionManagerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000021 /* AgentSessionManagerApp.swift */; };
+		A10000000000000000000012 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000022 /* ContentView.swift */; };
+		A10000000000000000000013 /* SessionManagerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* SessionManagerModel.swift */; };
+		A10000000000000000000014 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000024 /* SidebarView.swift */; };
+		A10000000000000000000015 /* SessionTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000025 /* SessionTableView.swift */; };
+		A10000000000000000000016 /* SessionInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000026 /* SessionInspectorView.swift */; };
+		A10000000000000000000017 /* OperationPreviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000027 /* OperationPreviewSheet.swift */; };
+		A10000000000000000000018 /* ConflictResolutionPreviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* ConflictResolutionPreviewSheet.swift */; };
+		A10000000000000000000019 /* ReportHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* ReportHistoryView.swift */; };
+		A1000000000000000000001A /* MaintenanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002A /* MaintenanceView.swift */; };
+		A1000000000000000000001B /* ArchiveReadinessSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002B /* ArchiveReadinessSheet.swift */; };
+		A1000000000000000000001C /* NativeArchiveSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002C /* NativeArchiveSheets.swift */; };
+		A1000000000000000000001D /* NativeRestoreSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002D /* NativeRestoreSheets.swift */; };
+		A1000000000000000000001E /* PersistentMainSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002E /* PersistentMainSplitView.swift */; };
+		A1000000000000000000001F /* NativeDeleteSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002F /* NativeDeleteSheets.swift */; };
+		A100000000000000000000A1 /* PasteboardCopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1 /* PasteboardCopyButton.swift */; };
+		A100000000000000000000A2 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2 /* SettingsView.swift */; };
+		A20000000000000000000001 /* SessionManagerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* SessionManagerModel.swift */; };
+		A20000000000000000000002 /* AgentSessionManagerCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* AgentSessionManagerCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A10000000000000000000021 /* AgentSessionManagerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/AgentSessionManagerApp.swift; sourceTree = "<group>"; };
+		A10000000000000000000022 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/ContentView.swift; sourceTree = "<group>"; };
+		A10000000000000000000023 /* SessionManagerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/SessionManagerModel.swift; sourceTree = "<group>"; };
+		A10000000000000000000024 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/SidebarView.swift; sourceTree = "<group>"; };
+		A10000000000000000000025 /* SessionTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/SessionTableView.swift; sourceTree = "<group>"; };
+		A10000000000000000000026 /* SessionInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/SessionInspectorView.swift; sourceTree = "<group>"; };
+		A10000000000000000000027 /* OperationPreviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/OperationPreviewSheet.swift; sourceTree = "<group>"; };
+		A10000000000000000000028 /* ConflictResolutionPreviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/ConflictResolutionPreviewSheet.swift; sourceTree = "<group>"; };
+		A10000000000000000000029 /* ReportHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/ReportHistoryView.swift; sourceTree = "<group>"; };
+		A1000000000000000000002A /* MaintenanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/MaintenanceView.swift; sourceTree = "<group>"; };
+		A1000000000000000000002B /* ArchiveReadinessSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/ArchiveReadinessSheet.swift; sourceTree = "<group>"; };
+		A1000000000000000000002C /* NativeArchiveSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/NativeArchiveSheets.swift; sourceTree = "<group>"; };
+		A1000000000000000000002D /* NativeRestoreSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/NativeRestoreSheets.swift; sourceTree = "<group>"; };
+		A1000000000000000000002E /* PersistentMainSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/PersistentMainSplitView.swift; sourceTree = "<group>"; };
+		A1000000000000000000002F /* NativeDeleteSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/NativeDeleteSheets.swift; sourceTree = "<group>"; };
+		A100000000000000000000B1 /* PasteboardCopyButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/PasteboardCopyButton.swift; sourceTree = "<group>"; };
+		A100000000000000000000B2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/SettingsView.swift; sourceTree = "<group>"; };
+		A10000000000000000000031 /* AgentSessionManager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentSessionManager.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000012 /* AgentSessionManagerAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentSessionManagerAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A10000000000000000000032 /* AgentSessionManager */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AgentSessionManager;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000032 /* AgentSessionManagerAppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AgentSessionManagerAppTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000041 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* AgentSessionManagerCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A20000000000000000000041 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A20000000000000000000002 /* AgentSessionManagerCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000050 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000032 /* AgentSessionManager */,
+				A20000000000000000000032 /* AgentSessionManagerAppTests */,
+				A10000000000000000000021 /* AgentSessionManagerApp.swift */,
+				A10000000000000000000022 /* ContentView.swift */,
+				A10000000000000000000023 /* SessionManagerModel.swift */,
+				A10000000000000000000024 /* SidebarView.swift */,
+				A10000000000000000000025 /* SessionTableView.swift */,
+				A10000000000000000000026 /* SessionInspectorView.swift */,
+				A10000000000000000000027 /* OperationPreviewSheet.swift */,
+				A10000000000000000000028 /* ConflictResolutionPreviewSheet.swift */,
+				A10000000000000000000029 /* ReportHistoryView.swift */,
+				A1000000000000000000002A /* MaintenanceView.swift */,
+				A1000000000000000000002B /* ArchiveReadinessSheet.swift */,
+				A1000000000000000000002C /* NativeArchiveSheets.swift */,
+				A1000000000000000000002D /* NativeRestoreSheets.swift */,
+				A1000000000000000000002E /* PersistentMainSplitView.swift */,
+				A1000000000000000000002F /* NativeDeleteSheets.swift */,
+				A100000000000000000000B1 /* PasteboardCopyButton.swift */,
+				A100000000000000000000B2 /* SettingsView.swift */,
+				A10000000000000000000051 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000051 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000031 /* AgentSessionManager.app */,
+				A20000000000000000000012 /* AgentSessionManagerAppTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000060 /* AgentSessionManager */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000061 /* Build configuration list for PBXNativeTarget "AgentSessionManager" */;
+			buildPhases = (
+				A10000000000000000000040 /* Sources */,
+				A10000000000000000000041 /* Frameworks */,
+				A10000000000000000000042 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000032 /* AgentSessionManager */,
+			);
+			name = AgentSessionManager;
+			packageProductDependencies = (
+				A10000000000000000000002 /* AgentSessionManagerCore */,
+			);
+			productName = AgentSessionManager;
+			productReference = A10000000000000000000031 /* AgentSessionManager.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A20000000000000000000060 /* AgentSessionManagerAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A20000000000000000000061 /* Build configuration list for PBXNativeTarget "AgentSessionManagerAppTests" */;
+			buildPhases = (
+				A20000000000000000000040 /* Sources */,
+				A20000000000000000000041 /* Frameworks */,
+				A20000000000000000000042 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A20000000000000000000032 /* AgentSessionManagerAppTests */,
+			);
+			name = AgentSessionManagerAppTests;
+			packageProductDependencies = (
+				A10000000000000000000002 /* AgentSessionManagerCore */,
+			);
+			productName = AgentSessionManagerAppTests;
+			productReference = A20000000000000000000012 /* AgentSessionManagerAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000070 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					A10000000000000000000060 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+					A20000000000000000000060 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000071 /* Build configuration list for PBXProject "AgentSessionManager" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A10000000000000000000050;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A10000000000000000000003 /* XCLocalSwiftPackageReference "../../../AgentSessionManager" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A10000000000000000000051 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000060 /* AgentSessionManager */,
+				A20000000000000000000060 /* AgentSessionManagerAppTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000042 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A20000000000000000000042 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000040 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000011 /* AgentSessionManagerApp.swift in Sources */,
+				A10000000000000000000012 /* ContentView.swift in Sources */,
+				A10000000000000000000013 /* SessionManagerModel.swift in Sources */,
+				A10000000000000000000014 /* SidebarView.swift in Sources */,
+				A10000000000000000000015 /* SessionTableView.swift in Sources */,
+				A10000000000000000000016 /* SessionInspectorView.swift in Sources */,
+				A10000000000000000000017 /* OperationPreviewSheet.swift in Sources */,
+				A10000000000000000000018 /* ConflictResolutionPreviewSheet.swift in Sources */,
+				A10000000000000000000019 /* ReportHistoryView.swift in Sources */,
+				A1000000000000000000001A /* MaintenanceView.swift in Sources */,
+				A1000000000000000000001B /* ArchiveReadinessSheet.swift in Sources */,
+				A1000000000000000000001C /* NativeArchiveSheets.swift in Sources */,
+				A1000000000000000000001D /* NativeRestoreSheets.swift in Sources */,
+				A1000000000000000000001E /* PersistentMainSplitView.swift in Sources */,
+				A1000000000000000000001F /* NativeDeleteSheets.swift in Sources */,
+				A100000000000000000000A1 /* PasteboardCopyButton.swift in Sources */,
+				A100000000000000000000A2 /* SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A20000000000000000000040 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A20000000000000000000001 /* SessionManagerModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000080 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A10000000000000000000081 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		A10000000000000000000082 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 7;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Agent Session Manager";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sean.AgentSessionManager;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A10000000000000000000083 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 7;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Agent Session Manager";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sean.AgentSessionManager;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A20000000000000000000082 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sean.AgentSessionManagerAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A20000000000000000000083 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sean.AgentSessionManagerAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000071 /* Build configuration list for PBXProject "AgentSessionManager" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000080 /* Debug */,
+				A10000000000000000000081 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000061 /* Build configuration list for PBXNativeTarget "AgentSessionManager" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000082 /* Debug */,
+				A10000000000000000000083 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A20000000000000000000061 /* Build configuration list for PBXNativeTarget "AgentSessionManagerAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A20000000000000000000082 /* Debug */,
+				A20000000000000000000083 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A10000000000000000000003 /* XCLocalSwiftPackageReference "../../../AgentSessionManager" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../../AgentSessionManager;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A10000000000000000000002 /* AgentSessionManagerCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AgentSessionManagerCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A10000000000000000000070 /* Project object */;
+}

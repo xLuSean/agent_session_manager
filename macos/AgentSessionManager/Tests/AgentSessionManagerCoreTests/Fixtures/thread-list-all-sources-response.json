@@ -1,0 +1,35 @@
+{
+  "data": [
+    {
+      "id": "01900000-0000-7000-8000-000000000001",
+      "sessionId": "01900000-0000-7000-8000-000000000001",
+      "parentThreadId": null,
+      "preview": "Root fixture",
+      "ephemeral": false,
+      "modelProvider": "openai",
+      "createdAt": 1800000000,
+      "updatedAt": 1800000010,
+      "status": { "type": "notLoaded" },
+      "cwd": "/Users/example/Projects/sample",
+      "cliVersion": "0.147.0-alpha",
+      "source": "vscode",
+      "name": "Root"
+    },
+    {
+      "id": "01900000-0000-7000-8000-000000000002",
+      "sessionId": "01900000-0000-7000-8000-000000000002",
+      "parentThreadId": "01900000-0000-7000-8000-000000000001",
+      "preview": "Child fixture",
+      "ephemeral": false,
+      "modelProvider": "openai",
+      "createdAt": 1800000001,
+      "updatedAt": 1800000011,
+      "status": { "type": "notLoaded" },
+      "cwd": "/Users/example/Projects/sample",
+      "cliVersion": "0.147.0-alpha",
+      "source": "subAgent",
+      "name": "Child"
+    }
+  ],
+  "nextCursor": null
+}

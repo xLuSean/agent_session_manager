@@ -1,0 +1,17 @@
+{
+  "local-projects": {
+    "project-root": {
+      "name": "Root Project",
+      "rootPaths": ["/Users/example/Projects/sample"]
+    },
+    "project-nested": {
+      "name": "Nested App",
+      "rootPaths": ["/Users/example/Projects/sample/packages/app"]
+    },
+    "ignored-without-root": {
+      "name": "Ignored"
+    }
+  },
+  "project-order": ["project-nested", "project-root"],
+  "pinned-thread-ids": ["pinned-root", "pinned-child"]
+}

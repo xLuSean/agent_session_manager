@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "id": "01900000-0000-7000-8000-000000000001",
+      "extra": null,
+      "sessionId": "01900000-0000-7000-8000-000000000001",
+      "parentThreadId": null,
+      "preview": "Fixture protocol capture",
+      "ephemeral": false,
+      "modelProvider": "openai",
+      "createdAt": 1800000000,
+      "updatedAt": 1800000010,
+      "status": { "type": "notLoaded" },
+      "path": "/Users/example/.codex/sessions/example.jsonl",
+      "cwd": "/Users/example/Projects/sample",
+      "cliVersion": "0.147.0-alpha",
+      "source": "vscode",
+      "name": "Captured session",
+      "turns": []
+    }
+  ],
+  "nextCursor": null,
+  "backwardsCursor": "opaque-cursor"
+}
