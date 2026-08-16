@@ -27,10 +27,21 @@ done
 VERSION=${VERSION_OVERRIDE:-$(sed -n 's/.*MARKETING_VERSION = \([^;]*\);/\1/p' "$PROJECT_FILE" | head -1)}
 BUILD_NUMBER=${BUILD_NUMBER_OVERRIDE:-$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([^;]*\);/\1/p' "$PROJECT_FILE" | head -1)}
 ARCHITECTURE=${ARCHITECTURE_OVERRIDE:-$(uname -m)}
+RELEASE_SUFFIX=${RELEASE_SUFFIX_OVERRIDE-alpha.1}
 
 if [[ -z "$VERSION" || -z "$BUILD_NUMBER" ]]; then
     print -u2 "Could not resolve MARKETING_VERSION or CURRENT_PROJECT_VERSION."
     exit 1
+fi
+
+if [[ "$RELEASE_SUFFIX" == *[!A-Za-z0-9.-]* ]]; then
+    print -u2 "RELEASE_SUFFIX_OVERRIDE may contain only letters, numbers, dots, and hyphens."
+    exit 1
+fi
+
+RELEASE_VERSION="$VERSION"
+if [[ -n "$RELEASE_SUFFIX" ]]; then
+    RELEASE_VERSION="$VERSION-$RELEASE_SUFFIX"
 fi
 
 TEMPORARY_ROOT=$(mktemp -d /tmp/agent-session-manager-dmg.XXXXXX)
@@ -92,7 +103,7 @@ codesign --verify --deep --strict --verbose=2 "$BUILT_APP"
 ditto "$BUILT_APP" "$STAGING_DIRECTORY/$PRODUCT_NAME"
 ln -s /Applications "$STAGING_DIRECTORY/Applications"
 
-DMG_BASENAME="Agent-Session-Manager-$VERSION-local-$ARCHITECTURE.dmg"
+DMG_BASENAME="Agent-Session-Manager-$RELEASE_VERSION-$ARCHITECTURE.dmg"
 DMG_PATH="$OUTPUT_DIRECTORY/$DMG_BASENAME"
 TEMPORARY_DMG="$TEMPORARY_ROOT/$DMG_BASENAME"
 
@@ -141,6 +152,7 @@ DMG_SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
 print ""
 print "DMG ready: $DMG_PATH"
 print "Version: $VERSION ($BUILD_NUMBER)"
+print "Release tag: v$RELEASE_VERSION"
 print "Architecture: $ARCHITECTURE"
 print "Bytes: $DMG_SIZE"
 print "SHA-256: $DMG_SHA256"

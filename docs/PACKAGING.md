@@ -12,10 +12,25 @@ The script first verifies that App sources and Xcode linkage cannot reach the Fi
 
 Artifacts are written under `dist/`, which is ignored by Git. Rebuilding the same version moves the prior exact DMG to macOS Trash before replacement.
 
-The local artifact name is:
+The default artifact name matches the current pre-release tag:
 
 ```text
-Agent-Session-Manager-<version>-local-<architecture>.dmg
+Agent-Session-Manager-0.1.3-alpha.1-<architecture>.dmg
+```
+
+The bundle version still comes from Xcode's `MARKETING_VERSION`. The packaging
+script appends the current `alpha.1` release suffix. Override the suffix for a
+later pre-release without changing the bundle version:
+
+```bash
+RELEASE_SUFFIX_OVERRIDE=alpha.2 ./scripts/package_dmg.sh
+```
+
+Set an explicitly empty suffix for a stable artifact such as
+`Agent-Session-Manager-0.1.3-arm64.dmg`:
+
+```bash
+RELEASE_SUFFIX_OVERRIDE= ./scripts/package_dmg.sh
 ```
 
 This local artifact starts directly in Codex Live, exactly like the Xcode Debug scheme. There is no Fixture/Live product switch and no launch environment override. Fixture implementations live in the separate `AgentSessionManagerFixtures` Swift target for deterministic tests and internal harnesses only; the shipping Xcode App target does not link that target.
