@@ -55,6 +55,22 @@ use lifecycle interfaces supported by Codex.
 Only **Codex Live** is currently supported. The provider architecture leaves room for Claude and other agent systems,
 without assuming that their archive or delete semantics match Codex.
 
+## Usage examples
+
+Select an exact session in **Active**, then review the available lifecycle action before continuing:
+
+![Selecting a session and lifecycle action in Active](resource/usage_example/example_01-redacted.png)
+
+In **Archive**, a retained session can be reviewed or restored to Active:
+
+![Reviewing or restoring a retained session in Archive](resource/usage_example/example_02-redacted.png)
+
+Only sessions already classified in **Trash Bin** can be selected for permanent deletion:
+
+![Selecting a session for permanent deletion in Trash Bin](resource/usage_example/example_03_redacted.png)
+
+All screenshots above have session titles, IDs, project names, and local paths redacted.
+
 ## Safety model
 
 Every mutation follows the same path:

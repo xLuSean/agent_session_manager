@@ -56,6 +56,22 @@ App 不會直接修改 Codex 的 JSONL、SQLite、cache 或 session 檔案。Arc
 目前只支援 **Codex Live**。Provider 架構保留給未來的 Claude 或其他 agent systems，但不假設它們
 具有和 Codex 相同的 archive／delete semantics。
 
+## 操作畫面
+
+在 **Active** 精確選取 session，再確認可用的 lifecycle 操作：
+
+![在 Active 選取 session 與 lifecycle 操作](resource/usage_example/example_01-redacted.png)
+
+在 **Archive** 中，可以重新檢查保留的 session，或將它 Restore 回 Active：
+
+![在 Archive 檢查或 Restore 保留的 session](resource/usage_example/example_02-redacted.png)
+
+只有已歸類到 **Trash Bin** 的 session，才能被選取並執行永久刪除：
+
+![在 Trash Bin 選取準備永久刪除的 session](resource/usage_example/example_03_redacted.png)
+
+以上畫面已遮罩 session 標題、ID、專案名稱與本機路徑。
+
 ## 安全模型
 
 每次 mutation 都遵循同一條路徑：
