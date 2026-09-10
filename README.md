@@ -124,7 +124,8 @@ using the command below. Older artifacts may be available in [Releases](https://
 but are not necessarily the latest local build. Calculate the DMG checksum and compare it with the packaging output:
 
 ```bash
-shasum -a 256 dist/Agent-Session-Manager-0.1.3-streamlined-20260909-arm64.dmg
+# From the directory containing the three matching candidate files, replace <version>:
+shasum -a 256 -c "Agent-Session-Manager-<version>-arm64.dmg.sha256"
 ```
 
 Open the DMG and drag `AgentSessionManager.app` into Applications. Because this build is not notarized, macOS
@@ -149,14 +150,16 @@ Run the local verification suite without sending live lifecycle mutations:
 ./scripts/verify.sh
 ```
 
-Build the current local DMG:
+Prepare a new candidate from clean `main`:
 
 ```bash
-RELEASE_SUFFIX_OVERRIDE=streamlined-20260909 ./scripts/package_lifecycle_canary_dmg.sh
+./scripts/release.sh plan
+./scripts/release.sh prepare
 ```
 
-The result is written to `dist/Agent-Session-Manager-0.1.3-streamlined-20260909-<architecture>.dmg`, without a standalone App in dist.
-Choose another `RELEASE_SUFFIX_OVERRIDE` for subsequent builds. See
+The result is a matching DMG, `.dmg.sha256` and `.dmg.candidate.json` in `dist/`, without a standalone App.
+For a local-only candidate on a development branch, explicitly add `--local` to both commands. Such a candidate cannot
+be finalized as a public release. Do not override the version through environment variables. See
 [Packaging](docs/DEVELOPMENT.md) for the complete process and signing/notarization requirements.
 
 ## Versioning
