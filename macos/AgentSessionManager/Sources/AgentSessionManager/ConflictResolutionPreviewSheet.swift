@@ -9,6 +9,9 @@ struct ConflictResolutionPreviewSheet: View {
     @State private var isSubmitting = false
 
     private var proposal: ConflictResolutionPreview { preview.proposal }
+    private var isExternalDeletion: Bool {
+        proposal.observedStatus == .externallyMissing
+    }
 
     var body: some View {
         NavigationStack {
@@ -26,7 +29,9 @@ struct ConflictResolutionPreviewSheet: View {
                     Text(
                         preview.operationPreview == nil
                             ? "No native session or SQLite membership will be changed."
-                            : "Accepting the native restore removes only this app's Trash marker. Codex is already Active and will not receive a lifecycle request."
+                            : isExternalDeletion
+                                ? "Acknowledging the external deletion moves only this app's stale Trash marker to Deleted. Codex will not receive a lifecycle request."
+                                : "Choose whether to accept Codex's Active state or review one official Archive attempt that keeps this app's existing Trash intent."
                     )
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -72,6 +77,27 @@ struct ConflictResolutionPreviewSheet: View {
                                 }
                                 evidenceRow("Exact read detail", exactReadback.message)
                             }
+                            if let evidence = proposal.externalDeletionEvidence {
+                                Divider()
+                                evidenceRow("External deletion proof", "Verified")
+                                evidenceRow("Runtime", evidence.runtimeVersion, monospaced: true)
+                                evidenceRow(
+                                    "Complete inventory observed",
+                                    evidence.inventoryObservedAt.formatted(
+                                        date: .abbreviated,
+                                        time: .standard
+                                    )
+                                )
+                                evidenceRow(
+                                    "Exact read observed",
+                                    evidence.exactReadObservedAt.formatted(
+                                        date: .abbreviated,
+                                        time: .standard
+                                    )
+                                )
+                                evidenceRow("RPC code", "\(evidence.rpcCode)", monospaced: true)
+                                evidenceRow("Exact read detail", evidence.message)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 4)
@@ -105,7 +131,12 @@ struct ConflictResolutionPreviewSheet: View {
                                         .font(.callout)
                                 }
                                 if option.action.changesNativeState {
-                                    Label("Would require a native lifecycle mutation", systemImage: "server.rack")
+                                    Label(
+                                        option.readiness == .readyToApply
+                                            ? "Uses one official Archive request with fresh readback"
+                                            : "Native lifecycle mutation is unavailable",
+                                        systemImage: "server.rack"
+                                    )
                                         .font(.caption)
                                         .foregroundStyle(.red)
                                 }
@@ -116,6 +147,24 @@ struct ConflictResolutionPreviewSheet: View {
                                     )
                                         .font(.caption)
                                         .foregroundStyle(.orange)
+                                }
+                                if option.action == .reapplyTrashIntent,
+                                   option.readiness == .readyToApply {
+                                    Button("Review Archive Again and Keep in Trash…") {
+                                        guard !isSubmitting else { return }
+                                        isSubmitting = true
+                                        Task {
+                                            await model.prepareReapplyTrashIntent(from: preview)
+                                            if model.pendingConflictResolutionPreview?.id == preview.id {
+                                                isSubmitting = false
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(isSubmitting)
+                                    .immediateHelp(
+                                        "Create a frozen native Archive Preview while preserving the exact Manager Trash intent"
+                                    )
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -128,7 +177,7 @@ struct ConflictResolutionPreviewSheet: View {
                     }
 
                     if isSubmitting {
-                        ProgressView("Applying manager state and verifying readback…")
+                        ProgressView("Preparing or applying the selected resolution…")
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
@@ -151,7 +200,11 @@ struct ConflictResolutionPreviewSheet: View {
                 }
                 if preview.operationPreview != nil {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Confirm Accept Native Restore") {
+                        Button(
+                            isExternalDeletion
+                                ? "Confirm External Deletion"
+                                : "Confirm Accept Native Restore"
+                        ) {
                             guard !isSubmitting else { return }
                             isSubmitting = true
                             Task {
@@ -163,7 +216,11 @@ struct ConflictResolutionPreviewSheet: View {
                         }
                         .keyboardShortcut(.defaultAction)
                         .disabled(isSubmitting)
-                        .immediateHelp("Confirm removal of only the manager Trash marker; Codex remains Active.")
+                        .immediateHelp(
+                            isExternalDeletion
+                                ? "Confirm the readback-only Trash to Deleted transition; no Codex request is sent."
+                                : "Confirm removal of only the manager Trash marker; Codex remains Active."
+                        )
                     }
                 }
             }
@@ -181,7 +238,9 @@ struct ConflictResolutionPreviewSheet: View {
             .font(.title3.weight(.bold))
             .foregroundStyle(.blue)
             Text(
-                "This removes the session from this app's Trash Bin and presents it as Active. It does not archive, restore, or delete anything in Codex."
+                isExternalDeletion
+                    ? "This removes the stale session from this app's Trash Bin and records it under Deleted. It does not archive, restore, or delete anything in Codex."
+                    : "This removes the session from this app's Trash Bin and presents it as Active. It does not archive, restore, or delete anything in Codex."
             )
             .font(.callout.weight(.semibold))
         }

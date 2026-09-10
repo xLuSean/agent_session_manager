@@ -455,6 +455,7 @@ public extension SQLiteStateStore {
                 guard let runtimeVersion = checkpoint.runtimeVersion,
                       !runtimeVersion.isEmpty,
                       preview.manifestHash == (try ConflictResolutionHasher.manifestHash(
+                          operation: .restore,
                           providerInventoryHash: preview.providerInventoryHash,
                           runtimeVersion: runtimeVersion,
                           createdAt: preview.createdAt,
@@ -586,6 +587,205 @@ public extension SQLiteStateStore {
         return reportReadback
     }
 
+    /// Closes one frozen Externally Missing membership after the coordinator
+    /// has just re-established the read-only dual absence proof. The manager
+    /// membership removal, Deleted tombstone, Report, and Preview consumption
+    /// are one transaction; this function has no Codex transport dependency.
+    func commitAcknowledgeExternalDeletion(
+        previewID: UUID,
+        confirmationTokenHash: String,
+        startedAt: Date,
+        completedAt: Date,
+        observedInventoryHash: String,
+        reportID: UUID
+    ) throws -> PersistentOperationReport {
+        let canonicalStartedAt = PersistentTimestamp.canonical(startedAt)
+        let canonicalCompletedAt = PersistentTimestamp.canonical(
+            max(startedAt, completedAt)
+        )
+        let committed = try withLockedDatabase { database in
+            try transaction(database) {
+                guard let preview = try loadPreview(id: previewID, database: database),
+                      preview.status == .prepared,
+                      preview.provider == .codex,
+                      preview.operation == .permanentlyDelete,
+                      preview.trashMembershipMutation == .remove,
+                      preview.items.count == 1,
+                      let item = preview.items.first,
+                      item.expectedNativeState == .absent else {
+                    throw PersistentStateError.invalidRecord(
+                        "Preview is not a prepared external-deletion acknowledgement."
+                    )
+                }
+                guard preview.expiresAt > canonicalCompletedAt else {
+                    throw PersistentStateError.invalidRecord(
+                        "Conflict resolution Preview expired before confirmation."
+                    )
+                }
+                guard preview.confirmationTokenHash == confirmationTokenHash else {
+                    throw PersistentStateError.confirmationMismatch
+                }
+                guard let checkpoint = try loadCheckpoint(
+                    provider: preview.provider,
+                    database: database
+                ),
+                      checkpoint.inventoryComplete,
+                      let runtimeVersion = checkpoint.runtimeVersion,
+                      CodexAppServerProvider
+                        .supportsVerifiedExternalDeletionReadbackContract(runtimeVersion),
+                      !observedInventoryHash.isEmpty,
+                      preview.manifestHash == (try ConflictResolutionHasher.manifestHash(
+                        operation: .permanentlyDelete,
+                        providerInventoryHash: preview.providerInventoryHash,
+                        runtimeVersion: runtimeVersion,
+                        createdAt: preview.createdAt,
+                        expiresAt: preview.expiresAt,
+                        items: preview.items
+                      )) else {
+                    throw PersistentStateError.invalidRecord(
+                        "Provider checkpoint or external-deletion Preview drifted before commit."
+                    )
+                }
+                let frozenCheckpoint = ProviderCheckpointRecord(
+                    provider: checkpoint.provider,
+                    runtimeVersion: runtimeVersion,
+                    inventoryHash: preview.providerInventoryHash,
+                    refreshedAt: preview.createdAt,
+                    inventoryComplete: true,
+                    protectionComplete: false
+                )
+                try validate(
+                    preview,
+                    checkpoint: frozenCheckpoint,
+                    requiresCompleteProtection: false
+                )
+
+                let memberships = try loadTrashMemberships(
+                    provider: preview.provider,
+                    database: database
+                )
+                guard let membership = memberships.first(where: {
+                    $0.managerKey == item.managerKey
+                }),
+                      membership.nativeSessionID == item.nativeSessionID,
+                      try ConflictResolutionHasher.membershipSetHash(memberships)
+                        == item.expectedProtectionHash else {
+                    throw PersistentStateError.invalidRecord(
+                        "Trash membership drifted after conflict resolution Preview."
+                    )
+                }
+                guard try loadDeletedSessions(
+                    provider: preview.provider,
+                    database: database
+                ).allSatisfy({
+                    $0.managerKey != item.managerKey
+                        && $0.nativeSessionID != item.nativeSessionID
+                }) else {
+                    throw PersistentStateError.invalidRecord(
+                        "A Deleted tombstone already exists for the exact task."
+                    )
+                }
+
+                try execute(
+                    "DELETE FROM trash_memberships WHERE provider = ? AND native_session_id = ? AND manager_key = ?",
+                    values: [
+                        .text(preview.provider.rawValue),
+                        .text(item.nativeSessionID),
+                        .text(item.managerKey),
+                    ],
+                    database: database
+                )
+                guard sqlite3_changes(database) == 1 else {
+                    throw PersistentStateError.invalidRecord(
+                        "Trash membership was not removed: \(item.managerKey)"
+                    )
+                }
+
+                try execute(
+                    """
+                    INSERT INTO deleted_sessions (
+                        provider, native_session_id, manager_key,
+                        title_at_deletion, project_id_at_deletion,
+                        working_directory_at_deletion, known_size_bytes,
+                        provider_inventory_hash_at_deletion, deleted_at,
+                        delete_report_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values: [
+                        .text(preview.provider.rawValue),
+                        .text(item.nativeSessionID),
+                        .text(item.managerKey),
+                        .text(item.expectedTitle),
+                        .optionalText(item.expectedProjectID),
+                        .optionalText(item.expectedWorkingDirectory),
+                        .optionalInt64(item.knownSizeBytes),
+                        .text(observedInventoryHash),
+                        .text(encode(canonicalCompletedAt)),
+                        .text(reportID.uuidString.lowercased()),
+                    ],
+                    database: database
+                )
+                guard sqlite3_changes(database) == 1 else {
+                    throw PersistentStateError.invalidRecord(
+                        "External deletion acknowledgement did not create a durable Deleted tombstone."
+                    )
+                }
+
+                let report = PersistentOperationReport(
+                    id: reportID,
+                    previewID: preview.id,
+                    provider: preview.provider,
+                    operation: .permanentlyDelete,
+                    outcome: .success,
+                    startedAt: canonicalStartedAt,
+                    completedAt: canonicalCompletedAt,
+                    releasedBytesComplete: false,
+                    errorCode: "external_deletion_acknowledged",
+                    errorMessage: "Codex was already absent; no lifecycle request was sent.",
+                    items: [
+                        PersistentReportItem(
+                            managerKey: item.managerKey,
+                            outcome: .success,
+                            observedNativeState: .absent,
+                            evidenceAt: canonicalCompletedAt,
+                            errorCode: "external_deletion_acknowledged",
+                            errorMessage: "Complete inventory and exact-ID readback both confirmed absence; no lifecycle request was sent."
+                        )
+                    ]
+                )
+                try validate(report)
+                try insertOperationReportAndConsumePreview(
+                    report,
+                    expectedPreview: preview,
+                    database: database
+                )
+                _ = try pruneOperationHistory(for: report.provider, database: database)
+                return report
+            }
+        }
+
+        guard let reportReadback = try operationReport(id: committed.id),
+              reportReadback == committed,
+              try operationPreview(id: previewID)?.status == .consumed else {
+            throw PersistentStateError.invalidRecord(
+                "External deletion acknowledgement committed, but Report or Preview readback failed. Do not retry; refresh to reconcile."
+            )
+        }
+        let membershipKeys = Set(
+            try trashMemberships(for: committed.provider).map(\.managerKey)
+        )
+        guard !membershipKeys.contains(committed.items[0].managerKey),
+              try deletedSessions(for: committed.provider).contains(where: {
+                $0.managerKey == committed.items[0].managerKey
+                    && $0.deleteReportID == committed.id
+              }) else {
+            throw PersistentStateError.invalidRecord(
+                "External deletion acknowledgement committed, but membership or tombstone readback failed. Do not retry; refresh to reconcile."
+            )
+        }
+        return reportReadback
+    }
+
     /// Removes manager-owned Trash intent only. It has no native lifecycle side
     /// effect. Production UI operations use the frozen transactional coordinator
     /// above instead of this lower-level reconciliation primitive.
@@ -614,17 +814,23 @@ public extension SQLiteStateStore {
         )
     }
 
-    /// Narrow persistence entrypoint for Accept Native Restore. This operation
-    /// exits manager Trash and cannot perform a protected native mutation.
+    /// Narrow persistence entrypoint for manager-only conflict resolution.
+    /// Neither accepted native restore nor acknowledged external deletion can
+    /// perform a provider lifecycle mutation.
     func saveConflictResolutionPreview(
         _ preview: PersistentOperationPreview,
         checkpoint: ProviderCheckpointRecord
     ) throws {
-        guard preview.operation == .restore,
-              preview.items.count == 1,
-              preview.items.first?.expectedNativeState == .active else {
+        let supportedShape = preview.items.count == 1 && (
+            preview.operation == .restore
+                && preview.items.first?.expectedNativeState == .active
+            || preview.operation == .permanentlyDelete
+                && preview.items.first?.expectedNativeState == .absent
+                && preview.trashMembershipMutation == .remove
+        )
+        guard supportedShape else {
             throw PersistentStateError.invalidRecord(
-                "Conflict resolution persistence accepts only one Active Restore item."
+                "Conflict resolution persistence received an unsupported operation shape."
             )
         }
         try persistOperationPreview(
@@ -648,14 +854,33 @@ public extension SQLiteStateStore {
         try withLockedDatabase { database in
             try transaction(database) {
                 try upsert(checkpoint, database: database)
+                if let expectedMembershipHash = preview.expectedTrashMembershipSetHash {
+                    let memberships = try loadTrashMemberships(
+                        provider: preview.provider,
+                        database: database
+                    )
+                    guard preview.items.allSatisfy({ item in
+                        memberships.contains {
+                            $0.managerKey == item.managerKey
+                                && $0.nativeSessionID == item.nativeSessionID
+                        }
+                    }),
+                    try ConflictResolutionHasher.membershipSetHash(memberships)
+                        == expectedMembershipHash else {
+                        throw PersistentStateError.invalidRecord(
+                            "Reapply Trash Intent Preview detected frozen Manager Trash membership drift."
+                        )
+                    }
+                }
                 try execute(
                     """
                     INSERT INTO operation_previews (
                         id, provider, operation, status, confirmation_token_hash,
                         manifest_hash, provider_inventory_hash, created_at,
                         expires_at, item_count, known_size_bytes, unknown_size_count,
-                        affected_set_hash, manager_intent, trash_membership_mutation
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        affected_set_hash, manager_intent, trash_membership_mutation,
+                        expected_trash_membership_set_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     values: [
                         .text(preview.id.uuidString.lowercased()),
@@ -673,6 +898,7 @@ public extension SQLiteStateStore {
                         .optionalText(preview.affectedSetHash),
                         .text(preview.operation.rawValue),
                         .optionalText(preview.trashMembershipMutation?.rawValue),
+                        .optionalText(preview.expectedTrashMembershipSetHash),
                     ],
                     database: database
                 )
@@ -893,6 +1119,24 @@ public extension SQLiteStateStore {
                         )
                     }
                 }
+                if let expectedMembershipHash = preview.expectedTrashMembershipSetHash {
+                    let memberships = try loadTrashMemberships(
+                        provider: preview.provider,
+                        database: database
+                    )
+                    guard preview.items.allSatisfy({ item in
+                        memberships.contains {
+                            $0.managerKey == item.managerKey
+                                && $0.nativeSessionID == item.nativeSessionID
+                        }
+                    }),
+                    try ConflictResolutionHasher.membershipSetHash(memberships)
+                        == expectedMembershipHash else {
+                        throw PersistentStateError.invalidRecord(
+                            "Reapply Trash Intent claim detected frozen Manager Trash membership drift."
+                        )
+                    }
+                }
                 // Re-validate the exact SQLite record inside the claim
                 // transaction so corrupt or incomplete item rows fail before
                 // any status change or provider call.
@@ -927,6 +1171,7 @@ public extension SQLiteStateStore {
                         providerInventoryHash: preview.providerInventoryHash,
                         affectedSetHash: preview.affectedSetHash,
                         trashMembershipMutation: preview.trashMembershipMutation,
+                        expectedTrashMembershipSetHash: preview.expectedTrashMembershipSetHash,
                         createdAt: preview.createdAt,
                         expiresAt: preview.expiresAt,
                         items: preview.items
@@ -989,6 +1234,24 @@ public extension SQLiteStateStore {
                         report: report,
                         database: database
                     )
+                }
+                if let expectedMembershipHash = preview.expectedTrashMembershipSetHash {
+                    let memberships = try loadTrashMemberships(
+                        provider: preview.provider,
+                        database: database
+                    )
+                    guard preview.items.allSatisfy({ item in
+                        memberships.contains {
+                            $0.managerKey == item.managerKey
+                                && $0.nativeSessionID == item.nativeSessionID
+                        }
+                    }),
+                    try ConflictResolutionHasher.membershipSetHash(memberships)
+                        == expectedMembershipHash else {
+                        throw PersistentStateError.invalidRecord(
+                            "Reapply Trash Intent Report detected frozen Manager Trash membership drift."
+                        )
+                    }
                 }
                 try insertOperationReportAndConsumePreview(
                     report,
@@ -1266,7 +1529,8 @@ public extension SQLiteStateStore {
     }
 
     /// Atomically removes complete operation-history bundles older than the
-    /// newest provider-scoped retention window. It never touches checkpoints,
+    /// newest provider-scoped retention window of safely completed reports.
+    /// Protected records may exceed the count cap. It never touches checkpoints,
     /// Trash memberships, or Previews without a committed Report.
     @discardableResult
     func pruneOperationHistory(
@@ -1307,7 +1571,7 @@ public extension SQLiteStateStore {
                 let placeholders = Array(repeating: "?", count: orderedIDs.count)
                     .joined(separator: ", ")
                 let candidates = try historyDeletionCandidates(
-                    whereClause: "WHERE provider = ? AND id IN (\(placeholders))",
+                    whereClause: "WHERE provider = ? AND id IN (\(placeholders)) AND \(Self.clearableHistoryPredicate)",
                     values: [.text(provider.rawValue)] + orderedIDs.map {
                         .text($0.uuidString.lowercased())
                     },
@@ -1367,7 +1631,7 @@ extension SQLiteStateStore {
         database: OpaquePointer
     ) throws -> OperationHistoryPruneResult {
         let candidates = try historyDeletionCandidates(
-            whereClause: "WHERE provider = ?",
+            whereClause: "WHERE provider = ? AND \(Self.clearableHistoryPredicate)",
             values: [
                 .text(provider.rawValue),
             ],
@@ -1384,10 +1648,9 @@ extension SQLiteStateStore {
         ) { statement in
             Int(sqlite3_column_int64(statement, 0))
         }
-        guard let retainedReportCount = retainedCounts.first,
-              retainedReportCount <= historyRetentionPolicy.maximumReportsPerProvider else {
+        guard let retainedReportCount = retainedCounts.first else {
             throw PersistentStateError.invalidRecord(
-                "Operation history still exceeds the configured provider retention limit."
+                "Operation history count is unavailable."
             )
         }
 
@@ -1438,6 +1701,8 @@ extension SQLiteStateStore {
     ) throws -> Int {
         var deletedItemCount = 0
         for candidate in candidates {
+            try execute("INSERT OR IGNORE INTO retired_history_keys(key) VALUES (?)",
+                values: [.text("preview:\(candidate.previewID.uuidString.lowercased())")], database: database)
             try execute(
                 "DELETE FROM operation_items WHERE preview_id = ? AND report_id = ?",
                 values: [
@@ -1597,6 +1862,17 @@ extension SQLiteStateStore {
         case nil:
             break
         }
+        if let expectedMembershipHash = preview.expectedTrashMembershipSetHash {
+            guard preview.operation == .archive,
+                  preview.trashMembershipMutation == nil,
+                  preview.items.count == 1,
+                  preview.items.first?.expectedNativeState == .active,
+                  !expectedMembershipHash.isEmpty else {
+                throw PersistentStateError.invalidRecord(
+                    "Frozen Trash preservation evidence requires one Active Archive item and no membership mutation."
+                )
+            }
+        }
         for item in preview.items {
             guard keys.insert(item.managerKey).inserted else {
                 throw PersistentStateError.duplicateManagerKey(item.managerKey)
@@ -1677,8 +1953,8 @@ extension SQLiteStateStore {
             INSERT INTO provider_checkpoints (
                 provider, runtime_version, inventory_hash, refreshed_at,
                 inventory_complete, protection_complete,
-                last_error_code, last_error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                last_error_code, last_error_message, compatibility_binding_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider) DO UPDATE SET
                 runtime_version = excluded.runtime_version,
                 inventory_hash = excluded.inventory_hash,
@@ -1686,7 +1962,8 @@ extension SQLiteStateStore {
                 inventory_complete = excluded.inventory_complete,
                 protection_complete = excluded.protection_complete,
                 last_error_code = excluded.last_error_code,
-                last_error_message = excluded.last_error_message
+                last_error_message = excluded.last_error_message,
+                compatibility_binding_json = excluded.compatibility_binding_json
             """,
             values: [
                 .text(checkpoint.provider.rawValue),
@@ -1697,6 +1974,7 @@ extension SQLiteStateStore {
                 .int64(checkpoint.protectionComplete ? 1 : 0),
                 .optionalText(checkpoint.lastErrorCode),
                 .optionalText(checkpoint.lastErrorMessage),
+                .optionalText(try checkpoint.compatibilityBinding.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }),
             ],
             database: database
         )
@@ -1710,7 +1988,7 @@ extension SQLiteStateStore {
             """
             SELECT provider, runtime_version, inventory_hash, refreshed_at,
                    inventory_complete, protection_complete,
-                   last_error_code, last_error_message
+                   last_error_code, last_error_message, compatibility_binding_json
             FROM provider_checkpoints WHERE provider = ?
             """,
             values: [.text(provider.rawValue)],
@@ -1722,6 +2000,7 @@ extension SQLiteStateStore {
             return ProviderCheckpointRecord(
                 provider: storedProvider,
                 runtimeVersion: optionalText(statement, 1),
+                compatibilityBinding: try optionalText(statement, 8).map { try JSONDecoder().decode(CodexCompatibilityBinding.self, from: Data($0.utf8)) },
                 inventoryHash: try requiredText(statement, 2),
                 refreshedAt: try decodeDate(requiredText(statement, 3)),
                 inventoryComplete: sqlite3_column_int64(statement, 4) == 1,
@@ -1828,14 +2107,15 @@ extension SQLiteStateStore {
             """
             SELECT provider, manager_intent, status, confirmation_token_hash,
                    manifest_hash, provider_inventory_hash, affected_set_hash,
-                   trash_membership_mutation, created_at, expires_at
+                   trash_membership_mutation, expected_trash_membership_set_hash,
+                   created_at, expires_at
             FROM operation_previews WHERE id = ?
             """,
             values: [.text(id.uuidString.lowercased())],
             database: database
         ) { statement -> (
             AgentSystem, PersistentOperation, PersistentPreviewStatus,
-            String, String, String, String?, TrashMembershipMutation?, Date, Date
+            String, String, String, String?, TrashMembershipMutation?, String?, Date, Date
         ) in
             guard let provider = AgentSystem(rawValue: try requiredText(statement, 0)),
                   let operation = PersistentOperation(rawValue: try requiredText(statement, 1)),
@@ -1860,8 +2140,9 @@ extension SQLiteStateStore {
                 try requiredText(statement, 5),
                 optionalText(statement, 6),
                 membershipMutation,
-                try decodeDate(requiredText(statement, 8)),
-                try decodeDate(requiredText(statement, 9))
+                optionalText(statement, 8),
+                try decodeDate(requiredText(statement, 9)),
+                try decodeDate(requiredText(statement, 10))
             )
         }
         guard let header = rows.first else { return nil }
@@ -1916,8 +2197,9 @@ extension SQLiteStateStore {
             providerInventoryHash: header.5,
             affectedSetHash: header.6,
             trashMembershipMutation: header.7,
-            createdAt: header.8,
-            expiresAt: header.9,
+            expectedTrashMembershipSetHash: header.8,
+            createdAt: header.9,
+            expiresAt: header.10,
             items: items
         )
     }

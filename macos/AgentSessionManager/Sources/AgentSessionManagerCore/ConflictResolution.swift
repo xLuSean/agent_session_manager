@@ -51,6 +51,50 @@ public enum ConflictResolutionReadiness: String, Codable, Sendable {
     }
 }
 
+/// Operation-specific proof that a Codex task is absent. This is deliberately
+/// separate from generic exact readback: the audited discriminator is accepted
+/// only together with a complete inventory that omits the same exact ID.
+public struct ExternalDeletionReadbackEvidence: Codable, Equatable, Sendable {
+    public let provider: AgentSystem
+    public let nativeSessionID: String
+    public let runtimeVersion: String
+    public let inventoryHash: String
+    public let inventoryObservedAt: Date
+    public let exactReadObservedAt: Date
+    public let rpcCode: Int
+    public let message: String
+
+    public var provesAbsence: Bool {
+        provider == .codex
+            && rpcCode == -32600
+            && message == "thread not loaded: \(nativeSessionID)"
+            && exactReadObservedAt >= inventoryObservedAt
+            && CodexAppServerProvider.supportsVerifiedExternalDeletionReadbackContract(
+                runtimeVersion
+            )
+    }
+
+    init(
+        provider: AgentSystem,
+        nativeSessionID: String,
+        runtimeVersion: String,
+        inventoryHash: String,
+        inventoryObservedAt: Date,
+        exactReadObservedAt: Date,
+        rpcCode: Int,
+        message: String
+    ) {
+        self.provider = provider
+        self.nativeSessionID = nativeSessionID
+        self.runtimeVersion = runtimeVersion
+        self.inventoryHash = inventoryHash
+        self.inventoryObservedAt = inventoryObservedAt
+        self.exactReadObservedAt = exactReadObservedAt
+        self.rpcCode = rpcCode
+        self.message = message
+    }
+}
+
 public struct ConflictResolutionOption: Identifiable, Codable, Equatable, Sendable {
     public let action: ConflictResolutionAction
     public let readiness: ConflictResolutionReadiness
@@ -83,6 +127,7 @@ public struct ConflictResolutionPreview: Identifiable, Codable, Equatable, Senda
     public let runtimeVersion: String?
     public let reconciledAt: Date
     public let exactReadback: ExactSessionReadbackEvidence?
+    public let externalDeletionEvidence: ExternalDeletionReadbackEvidence?
     public let options: [ConflictResolutionOption]
     public let warnings: [String]
 
@@ -99,6 +144,7 @@ public struct ConflictResolutionPreview: Identifiable, Codable, Equatable, Senda
         runtimeVersion: String?,
         reconciledAt: Date,
         exactReadback: ExactSessionReadbackEvidence?,
+        externalDeletionEvidence: ExternalDeletionReadbackEvidence? = nil,
         options: [ConflictResolutionOption],
         warnings: [String]
     ) {
@@ -112,6 +158,7 @@ public struct ConflictResolutionPreview: Identifiable, Codable, Equatable, Senda
         self.runtimeVersion = runtimeVersion
         self.reconciledAt = reconciledAt
         self.exactReadback = exactReadback
+        self.externalDeletionEvidence = externalDeletionEvidence
         self.options = options
         self.warnings = warnings
     }
@@ -146,7 +193,8 @@ public enum ConflictResolutionPlanner {
     public static func preview(
         for state: ReconciledSessionState,
         checkpoint: ProviderCheckpointRecord,
-        exactReadback: ExactSessionReadbackEvidence? = nil
+        exactReadback: ExactSessionReadbackEvidence? = nil,
+        externalDeletionEvidence: ExternalDeletionReadbackEvidence? = nil
     ) throws -> ConflictResolutionPreview {
         guard checkpoint.inventoryComplete else {
             throw ConflictResolutionPlanningError.incompleteInventory
@@ -175,6 +223,12 @@ public enum ConflictResolutionPlanner {
             || exactReadback.nativeSessionID != nativeID {
             throw ConflictResolutionPlanningError.identityMismatch
         }
+        if let externalDeletionEvidence,
+           externalDeletionEvidence.provider != provider
+            || externalDeletionEvidence.nativeSessionID != nativeID
+            || externalDeletionEvidence.runtimeVersion != checkpoint.runtimeVersion {
+            throw ConflictResolutionPlanningError.identityMismatch
+        }
 
         let options: [ConflictResolutionOption]
         switch state.status {
@@ -183,13 +237,19 @@ public enum ConflictResolutionPlanner {
                   state.trashMembership != nil else {
                 throw ConflictResolutionPlanningError.inconsistentEvidence
             }
-            options = activeTrashOptions(protectionComplete: checkpoint.protectionComplete)
+            options = activeTrashOptions(
+                session: state.liveSession!,
+                checkpoint: checkpoint
+            )
         case .externallyMissing:
             guard state.trashMembership != nil,
                   state.liveSession == nil || state.liveSession?.nativeState == .absent else {
                 throw ConflictResolutionPlanningError.inconsistentEvidence
             }
-            options = externallyMissingOptions(exactReadback: exactReadback)
+            options = externallyMissingOptions(
+                exactReadback: exactReadback,
+                externalDeletionEvidence: externalDeletionEvidence
+            )
         case .active, .archive, .trash, .unavailable:
             throw ConflictResolutionPlanningError.notAResolvableConflict(state.status)
         }
@@ -207,22 +267,38 @@ public enum ConflictResolutionPlanner {
             runtimeVersion: checkpoint.runtimeVersion,
             reconciledAt: checkpoint.refreshedAt,
             exactReadback: exactReadback,
+            externalDeletionEvidence: externalDeletionEvidence,
             options: options,
             warnings: [
                 state.status == .nativeActiveTrashConflict
-                    ? "Accept Native Restore changes only manager-owned Trash state; no provider lifecycle request is sent."
-                    : "Externally Missing resolution remains read-only in the current build.",
+                    ? "Accept Native Restore changes only manager-owned Trash state. Reapply Trash Intent sends one official Archive request and preserves the existing manager Trash intent."
+                    : "Acknowledge External Deletion changes only manager-owned Trash and Deleted state; no provider lifecycle request is sent.",
                 "Apply uses a frozen confirmation token and fails closed if the provider checkpoint or Trash membership drifts.",
             ]
         )
     }
 
     private static func activeTrashOptions(
-        protectionComplete: Bool
+        session: AgentSession,
+        checkpoint: ProviderCheckpointRecord
     ) -> [ConflictResolutionOption] {
-        let reapplyReason = protectionComplete
-            ? "Provider archive execution and exact readback are not enabled."
-            : "Lifecycle protection evidence is incomplete, and provider archive execution is not enabled."
+        let runtimeAudited = CodexLifecycleMutationKind.archive.supports(
+            runtimeVersion: checkpoint.runtimeVersion, binding: checkpoint.compatibilityBinding
+        )
+        let descendantsEligible = session.descendantCountKnown
+            && session.descendantCount == 0
+        let protectionEligible = !session.protection.blocksArchiveAttempt
+        let reapplyReady = runtimeAudited && descendantsEligible && protectionEligible
+        let reapplyReason: String
+        if reapplyReady {
+            reapplyReason = "The exact task is eligible for one official Archive attempt with fresh readback while the frozen manager Trash intent remains unchanged."
+        } else if !runtimeAudited {
+            reapplyReason = "The observed runtime is outside the audited official Archive contract."
+        } else if !protectionEligible {
+            reapplyReason = "Lifecycle protection evidence is incomplete or currently blocks Archive."
+        } else {
+            reapplyReason = "The descendant scope is unknown or non-empty."
+        }
         return [
             ConflictResolutionOption(
                 action: .acceptNativeRestore,
@@ -236,7 +312,7 @@ public enum ConflictResolutionPlanner {
             ),
             ConflictResolutionOption(
                 action: .reapplyTrashIntent,
-                readiness: .blocked,
+                readiness: reapplyReady ? .readyToApply : .blocked,
                 reason: reapplyReason,
                 requiredEvidence: [
                     "Pinned, running, current, and pinned-descendant protection are authoritative.",
@@ -248,20 +324,24 @@ public enum ConflictResolutionPlanner {
     }
 
     private static func externallyMissingOptions(
-        exactReadback: ExactSessionReadbackEvidence?
+        exactReadback: ExactSessionReadbackEvidence?,
+        externalDeletionEvidence: ExternalDeletionReadbackEvidence?
     ) -> [ConflictResolutionOption] {
         let acknowledgementReadiness: ConflictResolutionReadiness
         let acknowledgementReason: String
-        switch exactReadback {
-        case let evidence? where evidence.provesAbsence:
+        switch (externalDeletionEvidence, exactReadback) {
+        case let (evidence?, _) where evidence.provesAbsence:
+            acknowledgementReadiness = .readyToApply
+            acknowledgementReason = "A complete inventory and the audited exact-ID discriminator both prove this task is absent."
+        case (_, let evidence?) where evidence.provesAbsence:
             acknowledgementReadiness = .previewOnly
-            acknowledgementReason = "An official, version-compatible exact-ID readback proved absence; Apply is still not implemented."
-        case let evidence? where evidence.provesExistence:
+            acknowledgementReason = "Generic exact-ID absence exists, but the operation-specific dual readback was not established."
+        case (_, let evidence?) where evidence.provesExistence:
             acknowledgementReadiness = .blocked
             acknowledgementReason = "Official exact-ID readback found the session still exists, so it cannot be acknowledged as deleted."
-        case .some, nil:
+        case (_, .some(_)), (_, nil):
             acknowledgementReadiness = .blocked
-            acknowledgementReason = "No documented authoritative exact-ID absence result is available."
+            acknowledgementReason = "The version-audited complete inventory plus exact-ID absence proof is unavailable."
         }
         return [
             ConflictResolutionOption(
@@ -277,7 +357,8 @@ public enum ConflictResolutionPlanner {
                 readiness: acknowledgementReadiness,
                 reason: acknowledgementReason,
                 requiredEvidence: [
-                    "An official exact-ID lifecycle read confirms the session is absent.",
+                    "A complete fresh inventory omits the exact session ID.",
+                    "A version-audited exact-ID read returns the expected not-loaded discriminator.",
                     "The provider checkpoint and Trash membership set have not drifted.",
                     "The membership closure and audit evidence are committed atomically and read back.",
                 ]

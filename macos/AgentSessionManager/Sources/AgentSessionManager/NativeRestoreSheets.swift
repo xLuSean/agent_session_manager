@@ -17,24 +17,11 @@ struct NativeRestorePreviewSheet: View {
                     .foregroundStyle(.secondary)
             }
 
+            CodexDesktopQuitRequirementBanner()
+
             NativePreviewItemList(items: preview.items)
 
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(preview.warnings, id: \.self) { warning in
-                    Label(warning, systemImage: "info.circle.fill")
-                }
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-
-            Label(
-                preview.items.count == 1
-                    ? "Confirm sends exactly one official thread/unarchive request, then performs one fresh readback. It never retries automatically."
-                    : "Confirm preflights the whole frozen selection, then restores in order and stops after the first non-success. It never retries automatically.",
-                systemImage: "checkmark.shield"
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            NativeOperationDetails(warnings: preview.warnings)
 
             HStack {
                 Button("Cancel") { dismiss() }
@@ -59,7 +46,7 @@ struct NativeRestorePreviewSheet: View {
             .disabled(isSubmitting)
 
             if isSubmitting {
-                ProgressView("Restoring and verifying exact-ID readback…")
+                ProgressView("Checking Codex is exited, then restoring and verifying…")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -88,6 +75,10 @@ struct NativeRestoreReportSheet: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+
+            if report.outcome == .success {
+                CodexDesktopColdStartInstruction()
             }
 
             HStack(spacing: 24) {

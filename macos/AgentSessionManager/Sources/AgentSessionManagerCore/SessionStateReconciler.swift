@@ -3,6 +3,7 @@ import Foundation
 public struct ProviderInventorySnapshot: Equatable, Sendable {
     public let provider: AgentSystem
     public let runtimeVersion: String?
+    public let compatibilityBinding: CodexCompatibilityBinding?
     public let inventoryHash: String
     public let observedAt: Date
     public let inventoryComplete: Bool
@@ -16,6 +17,7 @@ public struct ProviderInventorySnapshot: Equatable, Sendable {
     public init(
         provider: AgentSystem,
         runtimeVersion: String? = nil,
+        compatibilityBinding: CodexCompatibilityBinding? = nil,
         inventoryHash: String,
         observedAt: Date,
         inventoryComplete: Bool,
@@ -28,6 +30,7 @@ public struct ProviderInventorySnapshot: Equatable, Sendable {
     ) {
         self.provider = provider
         self.runtimeVersion = runtimeVersion
+        self.compatibilityBinding = compatibilityBinding
         self.inventoryHash = inventoryHash
         self.observedAt = observedAt
         self.inventoryComplete = inventoryComplete
@@ -43,6 +46,7 @@ public struct ProviderInventorySnapshot: Equatable, Sendable {
         ProviderCheckpointRecord(
             provider: provider,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: compatibilityBinding,
             inventoryHash: inventoryHash,
             refreshedAt: observedAt,
             inventoryComplete: inventoryComplete,

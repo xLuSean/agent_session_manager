@@ -17,24 +17,16 @@ struct NativeArchivePreviewSheet: View {
                     .foregroundStyle(.secondary)
             }
 
+            CodexDesktopQuitRequirementBanner()
+
+            if preview.operation == .archive && !isReapplyTrashIntent {
+                Text("Archived conversations can be restored. No conversation is permanently deleted.")
+                    .foregroundStyle(.secondary)
+            }
+
             NativePreviewItemList(items: preview.items)
 
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(preview.warnings, id: \.self) { warning in
-                    Label(warning, systemImage: "exclamationmark.triangle.fill")
-                }
-            }
-            .font(.callout)
-            .foregroundStyle(.orange)
-
-            Label(
-                preview.items.count == 1
-                    ? "Confirm sends exactly one official thread/archive request, then performs one fresh readback. It never retries automatically."
-                    : "Confirm preflights the whole frozen selection, then sends requests in order and stops after the first non-success. It never retries automatically.",
-                systemImage: "checkmark.shield"
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            NativeOperationDetails(warnings: preview.warnings)
 
             HStack {
                 Button("Cancel") { dismiss() }
@@ -42,7 +34,7 @@ struct NativeArchivePreviewSheet: View {
                     .disabled(isSubmitting)
                     .immediateHelp("Keep the persisted Preview unused and send no request")
                 Spacer()
-                Button("Confirm \(preview.operation.label)") {
+                Button(confirmLabel) {
                     guard !isSubmitting else { return }
                     isSubmitting = true
                     Task {
@@ -54,12 +46,16 @@ struct NativeArchivePreviewSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(isSubmitting)
-                .immediateHelp("Confirm, send the official Archive request, and verify \(preview.operation.label)")
+                .immediateHelp(
+                    isReapplyTrashIntent
+                        ? "Confirm one official Archive request and preserve the exact Manager Trash intent"
+                        : "Confirm, send the official Archive request, and verify \(preview.operation.label)"
+                )
             }
             .disabled(isSubmitting)
 
             if isSubmitting {
-                ProgressView("Archiving and verifying exact-ID readback…")
+                ProgressView("Checking Codex is exited, then archiving and verifying…")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -68,9 +64,24 @@ struct NativeArchivePreviewSheet: View {
     }
 
     private var previewTitle: String {
-        preview.operation == .moveToTrash
+        isReapplyTrashIntent
+            ? "Archive Again and Keep in Trash"
+            : preview.operation == .moveToTrash
             ? "Active to Trash Preview"
-            : "Native Archive Preview"
+            : "Archive Preview"
+    }
+
+    private var confirmLabel: String {
+        isReapplyTrashIntent
+            ? "Confirm Archive Again"
+            : "Confirm \(preview.operation.label)"
+    }
+
+    private var isReapplyTrashIntent: Bool {
+        preview.operation == .archive
+            && preview.items.count == 1
+            && preview.items.first?.beforeCollection == .trash
+            && preview.items.first?.targetCollection == .trash
     }
 }
 
@@ -109,6 +120,62 @@ struct NativePreviewItemList: View {
     }
 }
 
+struct CodexDesktopQuitRequirementBanner: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(
+                "Quit Codex before continuing",
+                systemImage: "power"
+            )
+            .font(.headline)
+
+            Text("Use ⌘Q and keep Codex closed until the result appears. ASM checks before starting.")
+                .font(.callout)
+        }
+        .foregroundStyle(.orange)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.orange.opacity(0.45), lineWidth: 1)
+        }
+    }
+}
+
+struct NativeOperationDetails: View {
+    let warnings: [String]
+
+    var body: some View {
+        DisclosureGroup("How this operation is checked") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(warnings, id: \.self) { Text($0) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 6)
+            }
+            .frame(maxHeight: 110)
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+}
+
+struct CodexDesktopColdStartInstruction: View {
+    var body: some View {
+        Label(
+            "Next: reopen Codex Desktop and verify this task in the sidebar. Codex refreshes official lifecycle state during cold start.",
+            systemImage: "arrow.clockwise.circle.fill"
+        )
+        .font(.callout.weight(.semibold))
+        .foregroundStyle(.blue)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
 struct NativeArchiveReportSheet: View {
     @Environment(\.dismiss) private var dismiss
     let report: NativeArchiveReport
@@ -129,6 +196,19 @@ struct NativeArchiveReportSheet: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+
+            if report.preservedTrashIntent {
+                Label(
+                    "Manager Trash intent was preserved; Archived readback keeps this task in Trash.",
+                    systemImage: "trash.fill"
+                )
+                .font(.callout.weight(.medium))
+                    .foregroundStyle(.blue)
+            }
+
+            if report.outcome == .success {
+                CodexDesktopColdStartInstruction()
             }
 
             HStack(spacing: 24) {
@@ -198,7 +278,9 @@ struct NativeArchiveReportSheet: View {
     }
 
     private var operationLabel: String {
-        report.operation == .moveToTrash ? "Move to Trash" : "Archive"
+        report.preservedTrashIntent
+            ? "Archive Again and Keep in Trash"
+            : report.operation == .moveToTrash ? "Move to Trash" : "Archive"
     }
 
     private var summarySymbol: String {

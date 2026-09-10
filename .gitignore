@@ -6,11 +6,8 @@ xcuserdata/
 dist/
 tmp/
 
-# Private source screenshots used to create public redacted examples.
-resource/example_01.png
-resource/example_02.png
-resource/example_03.png
-
 .claude/
 .agents/
 .codex/
+.handoff/
+__pycache__

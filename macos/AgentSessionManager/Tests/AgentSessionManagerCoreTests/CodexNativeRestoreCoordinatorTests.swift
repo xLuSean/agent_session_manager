@@ -45,6 +45,50 @@ final class CodexNativeRestoreCoordinatorTests: XCTestCase {
         XCTAssertEqual(counts.restoreIDs, [nativeID])
     }
 
+    func testRunningCodexBlocksBeforeClaimOrRestoreRequest() async throws {
+        let fixture = try makeFixture()
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try store.upsertProviderCheckpoint(fixture.checkpoint)
+        let transport = NativeRestoreTransportStub(
+            preflight: fixture.snapshot,
+            readback: try snapshot(state: .active)
+        )
+        let gate = LifecycleExecutionGateStub(
+            error: .codexDesktopRunning(processKinds: [.codexHelper])
+        )
+        let coordinator = makeCoordinator(
+            store: store,
+            transport: transport,
+            executionGate: gate
+        )
+        let preview = try await coordinator.prepare(
+            managerKey: fixture.session.id,
+            snapshot: fixture.snapshot,
+            checkpoint: fixture.checkpoint
+        )
+
+        do {
+            _ = try await coordinator.execute(
+                preview: preview,
+                confirmationToken: preview.confirmationToken
+            )
+            XCTFail("Running Codex must block before Restore Preview claim.")
+        } catch let error as CodexLifecycleExecutionGateError {
+            XCTAssertEqual(
+                error,
+                .codexDesktopRunning(processKinds: [.codexHelper])
+            )
+        }
+
+        XCTAssertEqual(try store.operationPreview(id: preview.id)?.status, .prepared)
+        let gateCalls = await gate.observedCallCount()
+        XCTAssertEqual(gateCalls, 1)
+        let counts = await transport.callCounts()
+        XCTAssertEqual(counts.inventory, 0)
+        XCTAssertEqual(counts.restore, 0)
+    }
+
     func testRestorePreviewCanonicalizesSubMillisecondTimestampsBeforePersistence() async throws {
         let fixture = try makeFixture()
         let store = try makeStore(named: #function)
@@ -458,12 +502,14 @@ final class CodexNativeRestoreCoordinatorTests: XCTestCase {
     private func makeCoordinator(
         store: SQLiteStateStore,
         transport: NativeRestoreTransportStub,
+        executionGate: any CodexLifecycleExecutionChecking = LifecycleExecutionGateStub(),
         now: Date? = nil
     ) -> CodexNativeRestoreCoordinator {
         let fixedNow = now ?? observedAt.addingTimeInterval(30)
         return CodexNativeRestoreCoordinator(
             store: store,
             transport: transport,
+            executionGate: executionGate,
             now: { fixedNow },
             makePreviewID: { self.previewID },
             makeReportID: { self.reportID }

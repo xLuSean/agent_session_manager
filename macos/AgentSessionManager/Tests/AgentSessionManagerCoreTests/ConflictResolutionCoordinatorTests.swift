@@ -69,6 +69,42 @@ final class ConflictResolutionCoordinatorTests: XCTestCase {
         XCTAssertTrue(try store.trashMemberships(for: .codex).isEmpty)
     }
 
+    func testAcceptNativeRestorePreviewIgnoresNormalLastReconciledTimestampAdvance() async throws {
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        let initialCheckpoint = makeCheckpoint(
+            hash: "same-native-hash",
+            protectionComplete: false
+        )
+        let stalePresentationMembership = makeMembership(checkpoint: initialCheckpoint)
+        try store.saveTrashMembership(
+            stalePresentationMembership,
+            checkpoint: initialCheckpoint
+        )
+        let refreshedCheckpoint = ProviderCheckpointRecord(
+            provider: .codex,
+            runtimeVersion: initialCheckpoint.runtimeVersion,
+            inventoryHash: initialCheckpoint.inventoryHash,
+            refreshedAt: date(105),
+            inventoryComplete: true,
+            protectionComplete: false,
+            lastErrorCode: "protection-incomplete"
+        )
+        try store.commitReconciliationCheckpoint(
+            refreshedCheckpoint,
+            expectedTrashManagerKeys: [stalePresentationMembership.managerKey]
+        )
+        let coordinator = makeCoordinator(store: store, now: 110)
+
+        let preview = try await coordinator.prepareAcceptNativeRestore(
+            state: makeConflict(membership: stalePresentationMembership),
+            checkpoint: refreshedCheckpoint
+        )
+
+        XCTAssertEqual(preview.operation, .restore)
+        XCTAssertEqual(try store.operationPreview(id: preview.id)?.status, .prepared)
+    }
+
     func testCheckpointDriftRejectsWithoutRemovingMembershipOrWritingReport() async throws {
         let store = try makeStore(named: #function)
         defer { store.close() }
@@ -206,6 +242,251 @@ final class ConflictResolutionCoordinatorTests: XCTestCase {
         XCTAssertEqual(try store.operationPreview(id: preview.id)?.status, .prepared)
     }
 
+    func testAcknowledgeExternalDeletionCreatesTombstoneWithoutLifecycleMutation() async throws {
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        let checkpoint = makeExternalCheckpoint()
+        let membership = makeMembership(checkpoint: checkpoint)
+        try store.saveTrashMembership(membership, checkpoint: checkpoint)
+        let readback = ScriptedExternalDeletionReadback(
+            inventories: [
+                externalInventory(checkpoint: checkpoint, observedAt: 101),
+                externalInventory(
+                    checkpoint: checkpoint,
+                    observedAt: 111,
+                    inventoryHash: "inventory-after-unrelated-drift"
+                ),
+            ],
+            exactObservations: [
+                .absent(
+                    nativeSessionID: membership.nativeSessionID,
+                    observedAt: date(102),
+                    runtimeVersion: "0.148.0",
+                    rpcCode: -32600,
+                    message: "thread not loaded: \(membership.nativeSessionID)"
+                ),
+                .absent(
+                    nativeSessionID: membership.nativeSessionID,
+                    observedAt: date(112),
+                    runtimeVersion: "0.148.0",
+                    rpcCode: -32600,
+                    message: "thread not loaded: \(membership.nativeSessionID)"
+                ),
+            ]
+        )
+        let coordinator = makeExternalCoordinator(
+            store: store,
+            readback: readback,
+            now: 110,
+            previewID: uuid("00000000-0000-0000-0000-000000003001"),
+            reportID: uuid("00000000-0000-0000-0000-000000003002")
+        )
+
+        let prepared = try await coordinator.prepareAcknowledgeExternalDeletion(
+            state: makeExternallyMissing(membership: membership),
+            checkpoint: checkpoint
+        )
+        let proposal = try ConflictResolutionPlanner.preview(
+            for: makeExternallyMissing(membership: membership),
+            checkpoint: checkpoint,
+            externalDeletionEvidence: prepared.evidence
+        )
+        let report = try await coordinator.executeAcknowledgeExternalDeletion(
+            previewID: prepared.operationPreview.id,
+            confirmationToken: prepared.operationPreview.confirmationToken
+        )
+
+        XCTAssertEqual(proposal.options[1].readiness, .readyToApply)
+        XCTAssertEqual(prepared.operationPreview.items[0].targetCollection, .deleted)
+        XCTAssertEqual(report.operation, .permanentlyDelete)
+        XCTAssertEqual(report.errorCode, "external_deletion_acknowledged")
+        XCTAssertEqual(report.items[0].observedNativeState, .absent)
+        XCTAssertTrue(try store.trashMemberships(for: .codex).isEmpty)
+        XCTAssertEqual(try store.operationPreview(id: prepared.operationPreview.id)?.status, .consumed)
+        let tombstones = try store.deletedSessions(for: .codex)
+        XCTAssertEqual(tombstones.count, 1)
+        XCTAssertEqual(tombstones[0].managerKey, membership.managerKey)
+        XCTAssertEqual(tombstones[0].deleteReportID, report.id)
+        XCTAssertEqual(
+            tombstones[0].providerInventoryHashAtDeletion,
+            "inventory-after-unrelated-drift"
+        )
+        let inventoryCallCount = await readback.inventoryCallCount()
+        let exactReadCallCount = await readback.exactReadCallCount()
+        XCTAssertEqual(inventoryCallCount, 2)
+        XCTAssertEqual(exactReadCallCount, 2)
+    }
+
+    func testExternalDeletionPreviewIgnoresNormalLastReconciledTimestampAdvance() async throws {
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        let initialCheckpoint = makeExternalCheckpoint()
+        let stalePresentationMembership = makeMembership(checkpoint: initialCheckpoint)
+        try store.saveTrashMembership(
+            stalePresentationMembership,
+            checkpoint: initialCheckpoint
+        )
+        let refreshedCheckpoint = ProviderCheckpointRecord(
+            provider: .codex,
+            runtimeVersion: initialCheckpoint.runtimeVersion,
+            inventoryHash: initialCheckpoint.inventoryHash,
+            refreshedAt: date(105),
+            inventoryComplete: true,
+            protectionComplete: false,
+            lastErrorCode: "protection-incomplete"
+        )
+        try store.commitReconciliationCheckpoint(
+            refreshedCheckpoint,
+            expectedTrashManagerKeys: [stalePresentationMembership.managerKey]
+        )
+        XCTAssertEqual(
+            try store.trashMemberships(for: .codex)[0].lastReconciledAt,
+            date(105)
+        )
+        XCTAssertEqual(stalePresentationMembership.lastReconciledAt, date(100))
+
+        let readback = ScriptedExternalDeletionReadback(
+            inventories: [
+                externalInventory(checkpoint: refreshedCheckpoint, observedAt: 106),
+                externalInventory(checkpoint: refreshedCheckpoint, observedAt: 111),
+            ],
+            exactObservations: [107, 112].map {
+                .absent(
+                    nativeSessionID: stalePresentationMembership.nativeSessionID,
+                    observedAt: date(TimeInterval($0)),
+                    runtimeVersion: "0.148.0",
+                    rpcCode: -32600,
+                    message: "thread not loaded: \(stalePresentationMembership.nativeSessionID)"
+                )
+            }
+        )
+        let coordinator = makeExternalCoordinator(
+            store: store,
+            readback: readback,
+            now: 110
+        )
+
+        let prepared = try await coordinator.prepareAcknowledgeExternalDeletion(
+            state: makeExternallyMissing(membership: stalePresentationMembership),
+            checkpoint: refreshedCheckpoint
+        )
+        let report = try await coordinator.executeAcknowledgeExternalDeletion(
+            previewID: prepared.operationPreview.id,
+            confirmationToken: prepared.operationPreview.confirmationToken
+        )
+
+        XCTAssertEqual(report.outcome, .success)
+        XCTAssertTrue(try store.trashMemberships(for: .codex).isEmpty)
+        XCTAssertEqual(try store.deletedSessions(for: .codex).count, 1)
+    }
+
+    func testExternalDeletionReappearsAtApplyAndLeavesPreparedStateUntouched() async throws {
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        let checkpoint = makeExternalCheckpoint()
+        let membership = makeMembership(checkpoint: checkpoint)
+        try store.saveTrashMembership(membership, checkpoint: checkpoint)
+        let readback = ScriptedExternalDeletionReadback(
+            inventories: [
+                externalInventory(checkpoint: checkpoint, observedAt: 101),
+                externalInventory(checkpoint: checkpoint, observedAt: 111),
+            ],
+            exactObservations: [
+                .absent(
+                    nativeSessionID: membership.nativeSessionID,
+                    observedAt: date(102),
+                    runtimeVersion: "0.148.0",
+                    rpcCode: -32600,
+                    message: "thread not loaded: \(membership.nativeSessionID)"
+                ),
+                .present(
+                    nativeSessionID: membership.nativeSessionID,
+                    observedAt: date(112),
+                    runtimeVersion: "0.148.0"
+                ),
+            ]
+        )
+        let reportID = uuid("00000000-0000-0000-0000-000000003102")
+        let coordinator = makeExternalCoordinator(
+            store: store,
+            readback: readback,
+            now: 110,
+            previewID: uuid("00000000-0000-0000-0000-000000003101"),
+            reportID: reportID
+        )
+        let prepared = try await coordinator.prepareAcknowledgeExternalDeletion(
+            state: makeExternallyMissing(membership: membership),
+            checkpoint: checkpoint
+        )
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await coordinator.executeAcknowledgeExternalDeletion(
+                previewID: prepared.operationPreview.id,
+                confirmationToken: prepared.operationPreview.confirmationToken
+            )
+        }
+
+        XCTAssertEqual(try store.trashMemberships(for: .codex).count, 1)
+        XCTAssertTrue(try store.deletedSessions(for: .codex).isEmpty)
+        XCTAssertNil(try store.operationReport(id: reportID))
+        XCTAssertEqual(try store.operationPreview(id: prepared.operationPreview.id)?.status, .prepared)
+    }
+
+    func testExternalDeletionReportFailureRollsBackMembershipTombstoneAndPreview() async throws {
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        let checkpoint = makeExternalCheckpoint()
+        let membership = makeMembership(checkpoint: checkpoint)
+        try store.saveTrashMembership(membership, checkpoint: checkpoint)
+        let readback = ScriptedExternalDeletionReadback(
+            inventories: [
+                externalInventory(checkpoint: checkpoint, observedAt: 101),
+                externalInventory(checkpoint: checkpoint, observedAt: 111),
+            ],
+            exactObservations: [101, 112].map {
+                .absent(
+                    nativeSessionID: membership.nativeSessionID,
+                    observedAt: date(TimeInterval($0 + 1)),
+                    runtimeVersion: "0.148.0",
+                    rpcCode: -32600,
+                    message: "thread not loaded: \(membership.nativeSessionID)"
+                )
+            }
+        )
+        let coordinator = makeExternalCoordinator(
+            store: store,
+            readback: readback,
+            now: 110
+        )
+        let prepared = try await coordinator.prepareAcknowledgeExternalDeletion(
+            state: makeExternallyMissing(membership: membership),
+            checkpoint: checkpoint
+        )
+        try store.withLockedDatabase { database in
+            let sql = """
+            CREATE TRIGGER reject_external_deletion_report
+            BEFORE INSERT ON operation_reports
+            BEGIN
+                SELECT RAISE(ABORT, 'injected external deletion report failure');
+            END;
+            """
+            guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+                throw PersistentStateError.invalidRecord("Could not install rollback trigger.")
+            }
+        }
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await coordinator.executeAcknowledgeExternalDeletion(
+                previewID: prepared.operationPreview.id,
+                confirmationToken: prepared.operationPreview.confirmationToken
+            )
+        }
+
+        XCTAssertEqual(try store.trashMemberships(for: .codex).count, 1)
+        XCTAssertTrue(try store.deletedSessions(for: .codex).isEmpty)
+        XCTAssertEqual(try store.operationPreview(id: prepared.operationPreview.id)?.status, .prepared)
+    }
+
     private func makeCoordinator(
         store: SQLiteStateStore,
         now: TimeInterval = 110,
@@ -214,6 +495,22 @@ final class ConflictResolutionCoordinatorTests: XCTestCase {
     ) -> ConflictResolutionCoordinator {
         ConflictResolutionCoordinator(
             store: store,
+            now: { self.date(now) },
+            makePreviewID: { previewID },
+            makeReportID: { reportID }
+        )
+    }
+
+    private func makeExternalCoordinator(
+        store: SQLiteStateStore,
+        readback: ScriptedExternalDeletionReadback,
+        now: TimeInterval,
+        previewID: UUID = UUID(),
+        reportID: UUID = UUID()
+    ) -> ConflictResolutionCoordinator {
+        ConflictResolutionCoordinator(
+            store: store,
+            externalDeletionReadback: readback,
             now: { self.date(now) },
             makePreviewID: { previewID },
             makeReportID: { reportID }
@@ -246,6 +543,45 @@ final class ConflictResolutionCoordinatorTests: XCTestCase {
             trashMembership: membership,
             status: .nativeActiveTrashConflict,
             isStableForLifecyclePreview: false
+        )
+    }
+
+    private func makeExternallyMissing(
+        membership: TrashMembershipRecord
+    ) -> ReconciledSessionState {
+        ReconciledSessionState(
+            managerKey: membership.managerKey,
+            liveSession: nil,
+            trashMembership: membership,
+            status: .externallyMissing,
+            isStableForLifecyclePreview: false
+        )
+    }
+
+    private func makeExternalCheckpoint() -> ProviderCheckpointRecord {
+        ProviderCheckpointRecord(
+            provider: .codex,
+            runtimeVersion: "0.148.0",
+            inventoryHash: "inventory-missing",
+            refreshedAt: date(100),
+            inventoryComplete: true,
+            protectionComplete: false
+        )
+    }
+
+    private func externalInventory(
+        checkpoint: ProviderCheckpointRecord,
+        observedAt: TimeInterval,
+        inventoryHash: String? = nil
+    ) -> ProviderInventorySnapshot {
+        ProviderInventorySnapshot(
+            provider: .codex,
+            runtimeVersion: checkpoint.runtimeVersion,
+            inventoryHash: inventoryHash ?? checkpoint.inventoryHash,
+            observedAt: date(observedAt),
+            inventoryComplete: true,
+            protectionComplete: false,
+            sessions: []
         )
     }
 
@@ -298,6 +634,47 @@ final class ConflictResolutionCoordinatorTests: XCTestCase {
     private func date(_ seconds: TimeInterval) -> Date {
         Date(timeIntervalSince1970: seconds)
     }
+}
+
+private actor ScriptedExternalDeletionReadback: ExternalDeletionReadback {
+    private var inventories: [ProviderInventorySnapshot]
+    private var exactObservations: [ExternalDeletionExactObservation]
+    private var inventoryCalls = 0
+    private var exactReadCalls = 0
+
+    init(
+        inventories: [ProviderInventorySnapshot],
+        exactObservations: [ExternalDeletionExactObservation]
+    ) {
+        self.inventories = inventories
+        self.exactObservations = exactObservations
+    }
+
+    func inventorySnapshot() throws -> ProviderInventorySnapshot {
+        inventoryCalls += 1
+        guard !inventories.isEmpty else {
+            throw PersistentStateError.invalidRecord("No scripted inventory remains.")
+        }
+        return inventories.removeFirst()
+    }
+
+    func exactReadObservation(
+        nativeSessionID _: String,
+        auditedRuntimeVersion _: String
+    ) -> ExternalDeletionExactObservation {
+        exactReadCalls += 1
+        guard !exactObservations.isEmpty else {
+            return .unavailable(
+                observedAt: Date(timeIntervalSince1970: 0),
+                errorCode: "no_scripted_exact_read",
+                message: "No scripted exact read remains."
+            )
+        }
+        return exactObservations.removeFirst()
+    }
+
+    func inventoryCallCount() -> Int { inventoryCalls }
+    func exactReadCallCount() -> Int { exactReadCalls }
 }
 
 private func XCTAssertThrowsErrorAsync(

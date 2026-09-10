@@ -5,6 +5,8 @@ struct PasteboardCopyButton: View {
     let text: String
     let help: String
     var minimumWidth: CGFloat = 72
+    var buttonTitle = "Copy"
+    var copiedButtonTitle = "Copied"
 
     @State private var didCopy = false
 
@@ -16,7 +18,7 @@ struct PasteboardCopyButton: View {
             }
         } label: {
             Label(
-                didCopy ? "Copied" : "Copy",
+                didCopy ? copiedButtonTitle : buttonTitle,
                 systemImage: didCopy ? "checkmark" : "doc.on.doc"
             )
             .frame(minWidth: minimumWidth, alignment: .leading)

@@ -3,6 +3,7 @@ import Foundation
 protocol RestoreMutationTransport: Sendable {
     func inventorySnapshot() async throws -> ProviderInventorySnapshot
     func restore(nativeSessionID: String) async throws
+    func restore(nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws
 }
 
 actor CodexRestoreMutationTransport: RestoreMutationTransport {
@@ -17,7 +18,11 @@ actor CodexRestoreMutationTransport: RestoreMutationTransport {
     }
 
     func restore(nativeSessionID: String) async throws {
-        try await source.unarchive(threadID: nativeSessionID)
+        try await restore(nativeSessionID: nativeSessionID, expectedCompatibility: nil)
+    }
+
+    func restore(nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws {
+        try await source.unarchive(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
     }
 }
 
@@ -95,7 +100,7 @@ actor RestoreMutationExecutor {
 
         var acknowledgementError: Error?
         do {
-            try await transport.restore(nativeSessionID: item.nativeSessionID)
+            try await transport.restore(nativeSessionID: item.nativeSessionID, expectedCompatibility: checkpoint.compatibilityBinding)
         } catch {
             // Delivery can be indeterminate. Never replay automatically; use
             // the exact post-operation inventory as the outcome authority.
@@ -135,7 +140,7 @@ actor RestoreMutationExecutor {
         confirmationToken: String
     ) throws -> PersistentPreviewItem {
         guard preview.provider == .codex, checkpoint.provider == .codex else {
-            throw RestoreExecutionError.invalidPreview("the first executor slice accepts only Codex")
+            throw RestoreExecutionError.invalidPreview("Restore supports only Codex sessions")
         }
         guard preview.operation == .restore, preview.status == .executing else {
             throw RestoreExecutionError.invalidPreview("operation must be a claimed executing Restore")
@@ -166,7 +171,7 @@ actor RestoreMutationExecutor {
                 "Preview inventory or runtime binding is unavailable"
             )
         }
-        guard CodexAppServerProvider.supportsVerifiedLifecycleContract(runtimeVersion) else {
+        guard CodexLifecycleMutationKind.restore.supports(runtimeVersion: runtimeVersion, binding: checkpoint.compatibilityBinding) else {
             throw RestoreExecutionError.checkpointMismatch(
                 "runtime is outside the verified Restore contract"
             )
@@ -176,6 +181,7 @@ actor RestoreMutationExecutor {
             operation: preview.operation,
             providerInventoryHash: preview.providerInventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: checkpoint.compatibilityBinding,
             reconciliationTimestamp: checkpoint.refreshedAt,
             createdAt: preview.createdAt,
             expiresAt: preview.expiresAt,
@@ -200,7 +206,8 @@ actor RestoreMutationExecutor {
         guard snapshot.inventoryComplete else {
             throw RestoreExecutionError.preflightUnavailable("inventory coverage is incomplete")
         }
-        guard snapshot.runtimeVersion == checkpoint.runtimeVersion else {
+        guard snapshot.runtimeVersion == checkpoint.runtimeVersion,
+              snapshot.compatibilityBinding == checkpoint.compatibilityBinding else {
             throw RestoreExecutionError.stateDrift("runtime version changed")
         }
         // The inventory hash includes every session and display-only metadata.
@@ -233,7 +240,8 @@ actor RestoreMutationExecutor {
     ) -> RestoreExecutionResult {
         guard snapshot.provider == .codex,
               snapshot.inventoryComplete,
-              snapshot.runtimeVersion == checkpoint.runtimeVersion else {
+              snapshot.runtimeVersion == checkpoint.runtimeVersion,
+              snapshot.compatibilityBinding == checkpoint.compatibilityBinding else {
             return unknownResult(
                 preview: preview,
                 item: item,

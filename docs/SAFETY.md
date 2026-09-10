@@ -1,116 +1,111 @@
-# Safety Model
+# 安全規則與批次契約
 
-## Safety objective
+本文件定義不可因 UI 簡化或文件收斂而削弱的規則。它不授權操作真實資料；目前實測範圍見[驗收狀態](VALIDATION.md)，操作見[使用手冊](USER_GUIDE.md)。
 
-任何 session lifecycle mutation 都必須是精確、可預覽、可確認、可驗證且可稽核的。系統在資訊不足、狀態漂移或 provider 行為不確定時，選擇不動。
+## 資料與權限分界
 
-Confirmation 依可逆性分級。Archive、Restore、Move to Trash、Move to Archive 仍必須先凍結 exact Preview、由使用者按下明確 Confirm、防重入執行並逐筆 readback，但不要求 typed token。底層 one-time credential 只用於綁定 Preview/claim。Permanent Delete、Report History clear 與未來同等不可逆 action 才要求使用者輸入 exact token。
+| 邊界 | 可以做什麼 | 不能據此推論 |
+| --- | --- | --- |
+| 官方 App Server | 經操作專屬版本准入，封存、還原、刪除並正式回讀 | RPC acknowledgement／列表漏項不代表刪除成功 |
+| ASM 自有 SQLite | 保存管理意圖、凍結範圍、claim、結果與復原證據 | Deleted 紀錄不代表 Desktop／設定／備份已全清 |
+| Desktop 私有資料庫 | 只依已驗證版本與 schema，清除精確已確認 Ghost 殘留 | 不能一般化為任意 SQL 修復或刪除所有未知關聯 |
+| 全域設定 JSON | 成功結果後另看 diff、另確認，只移除已知 session 專屬欄位 | 對話確認不自動授權設定清理 |
+| 備份與歷史 | 備份保留復原證據；ASM 完成紀錄依安全保留規則清理 | 清紀錄不等於清備份、釋放 bytes 或安全抹除 |
 
-## Invariants
+完整 provider／native ID 是身份，title、project、cwd 或搜尋不是授權。預覽須綁定操作、版本、清單 checkpoint、保護證據、精確目標與有效期；執行不能重新查詢擴張或悄悄縮小範圍。
 
-1. **Pinned 永不 retire/delete**：pinned session 或含 pinned descendant 的 parent 不可 Archive、Trash、Delete。
-2. **Current / running 不 retire/delete**：正在執行或承載目前操作的 session 不可 Archive、Trash 或 Delete；Restore 是可逆的 Archived → Active，仍須 exact state/readback，但不使用破壞性操作的 clearance gate。
-3. **Delete only from Trash**：只有 manager Trash Bin member 可進入永久刪除 Preview。
-4. **Archive is retention**：Archive item 不因時間或空間政策自動成為 delete candidate。
-5. **Exact identity**：所有 selection、Preview、Report 顯示完整 provider 與 native session ID；title 只供辨識，不是唯一鍵。
-6. **Frozen manifest**：確認對象是 Preview 時凍結的 item list，不是在 Execute 時重新跑 title/project/time query。
-7. **Fail closed on drift**：任一 item 的 state/protection 與 Preview 不同，batch 停止並要求新 Preview。
+## 官方 lifecycle 的保護
 
-Provider inventory hash 仍用來綁定 durable Preview、manifest 與 claim-time checkpoint，但 native
-single-item preflight 不要求「整個 provider inventory」逐 byte 相同。該 hash 包含其他 sessions 與
-title／updatedAt 等顯示資料，將它直接當 mutation gate 會讓無關活動造成 false drift。送出 lifecycle
-request 前必須精確重驗 selected native ID、expected native state、protection evidence 與 descendant
-scope；這些 frozen item evidence 任一漂移仍 fail closed。
-8. **Official lifecycle interface only**：不得直接改 JSONL、SQLite、cache 或 rollout file。
-9. **Readback defines success**：API call 回傳成功不等於操作完成；必須重新觀察 target state。
-10. **Provider isolation**：一個 batch 不跨 agent system，避免不同 lifecycle semantics 混在同一 confirmation。
-11. **No silent batch shrinking**：所有 lifecycle operation 都可接受使用者以 row checkbox 建立的 multi-selection，但任一 item 不合格時整批不執行；不得自動移除 blocked item 後繼續。只有 Trash Bin 可以提供 Select All checkbox bar／Empty Trash，且確認前必須把當下選中的完整 manager IDs 凍結，不在執行時重新查詢。
+- 永久刪除只能從 Manager Trash Bin 開始；Archive 是保留，不是等待刪除。
+- 已知置頂、執行中、目前對話或置頂子對話都阻擋。置頂／子對話證據未知或衝突也阻擋；不支援的子對話 affected-set 不送 request。
+- 跨主機 running／current／writer 未知不是「已確認無占用」。只在已准入的操作契約下明示 attemptMayFail，允許官方單次 request 安全拒絕；不能用這項例外繞過私有 DB 維護檢查。
+- 確認後先 durable claim，每個 ID 最多送一次 request。官方 batch 全批 preflight，第一個 failure／unknown 後停止，剩餘列 notAttempted；不把多個 RPC 稱為原子批次。
+- Archive／Restore 成功分別要求較新、完整、同 runtime、同完整 ID 的 Archived／Active 回讀。
+- Delete 成功須同時有較新的完整 active＋archived inventory 缺席，以及該操作准入版本的精確不存在回應。timeout、自由文字 404、清單漏項或不符 ID 都不能替代。
+- 外部刪除確認使用獨立的 readback-only 契約，不呼叫 Delete，也不借用其他版本的缺席判準。
+- 官方操作失敗或未知不改 Trash 意圖；成功的 membership／tombstone 與 Report 在同一 ASM transaction 保存。恢復只回讀原操作，不再次送出。
 
-## Threats and mitigations
+## Ghost 判準：兩個訊號一致
 
-| Threat | Mitigation |
-|---|---|
-| 同名 session 選錯 | 完整 session ID、Desktop project、working folder、provider、updated time 一起顯示 |
-| Preview 後 session 被 pin | Execute 前重新讀 protection；漂移即整批停止 |
-| Archive 被當成 Trash | 用 local Trash membership 表達 intent，不以 native archived 單獨判定 |
-| App Server call timeout，結果未知 | 不盲目重送；以 exact ID readback 判定，仍未知則 report `unknown` |
-| Parent 變動連帶 descendants | Preview 列 descendants；pinned descendant hard block；readback 整棵受影響範圍 |
-| Provider 版本改變 | startup capability probe、contract tests、unsupported fail closed |
-| Local state 損壞 | SQLite migration、transaction、backup、reconcile；native runtime 仍是存在性的真相 |
-| UI 誤觸永久刪除 | Trash-only、destructive styling、逐批 token、完整 Preview |
-| 跨 provider ID 撞號 | namespaced manager key `<provider>:<nativeID>` |
+候選只限 Desktop catalog 的 host_id = 'local'。不能用「不是某個已知雲端 host」的黑名單；雲端對話沒有本機 canonical row 是正常狀態。
 
-## Reporting contract
+在已驗證 runtime／schema 下，確認 Ghost 必須同時符合：
 
-Archive、Trash、Restore 與 Delete 都應產生相同結構的 report：
+1. 目前本機 canonical state 的 threads 中沒有精確 ID。
+2. 官方 thread/read 回傳 error，code 為 -32600，message 完整等於 thread not loaded: <同一 ID>。
 
-- operation / provider / timestamp / preview ID / batch ID
-- total count
-- success count
-- failure count
-- known bytes affected
-- verified bytes released
-- unknown-size count
-- itemized: ID、title、project、working folder、before、target、observed、result、error
+成功 result 中的 status.type = notLoaded 代表對話存在，**與上述 error 意思不同**。逾時、其他錯誤、缺席證據不足或互相矛盾一律保留並列明原因。missing_candidate、UI 沒顯示、只查 active 列表或 inventory 漏項，都不能單獨進入 eligibility 判斷。
 
-Archive / Move to Trash 通常只改 lifecycle state，應回報 `0 B released`，不能把 rollout file 原始大小誤稱為已清出的空間。永久刪除的 released bytes 也只能在刪除前後測量方式可靠且 provider 支援時回報；否則標示 unknown。
+完整官方清單另負責 present、pin 與 descendant 保護。canonical 仍在或官方讀得到的對話不能強制清除。掃描先使用 App Server 取得精確證據；寫入階段停止 App Server，不能一邊為檢查重開 writer、一邊改資料庫。
 
-Manager-owned operation history 預設每個 provider 保留最新 500 份。Pruning 必須把 Report、對應 consumed Preview 與 Items 視為一個 bundle，在同一 transaction 刪除並回報完整 ID；不得碰 checkpoint、Trash membership、未完成 Preview 或其他 provider。Logical pruning 不自動執行 `VACUUM`，避免一般 report commit 觸發長時間整庫重寫。
+批次 Ghost 清理在 Final Review 及交易內刪除前，另從固定位置重新讀取釘選狀態。任何選中對話已被釘選，或釘選資訊缺失、格式不明、檔案不安全或讀取期間變動，都停止整批清理；不沿用掃描時的未釘選結論。既有操作的結果核對仍只讀取結果證據，不因事後釘選變化而重新執行清理。
 
-Diagnostic Logs與Report History分離。Logs只協助診斷App launch、inventory、Preview、execution、recovery與storage，不能用來宣告lifecycle成功；成功仍由durable Report與fresh native readback證明。`diagnostic-events.jsonl`固定0600，依30天／10,000筆／20 MiB三重上限prune，且禁止metadata key包含token、payload、conversation、prompt、body或content。不得把conversation內容、confirmation token、request payload或message body寫入message來繞過denylist。
+## 私有 DB 維護時窗
 
-使用者主動清除 history 時也使用相同 bundle boundary，但目標必須是 filter 查詢後凍結的精確 Report ID set，並要求一次性 confirmation token。確認後如果任一 ID 消失、新增或 bundle item count 漂移，整批 fail closed；成功後逐 ID 讀回 absent。這不等於清空 Trash，也不修改 provider checkpoint 或 Codex session。
+Ghost Delete 保持預設關閉、Experimental、runtime／schema 鎖定且 fail closed；短觀察窗與 SQLite 鎖不是官方 maintenance lease。
 
-Manager-owned SQLite maintenance 目前也只有唯讀 proposal。Backup candidate 必須是 exact sibling filename、regular non-symlink、permissions 0600、integrity/schema/application-ID verified，且 migration filename version 與內容一致；production 每類至少保留最新 3 份，額外 backup 滿 30 天才可列候選，超過 100 個候選整份 fail closed。損壞、無法驗證、非 0600、近期與 future-dated backup 永遠 protected。Maintenance sheet 只呈現 Core typed evidence，沒有 action controls。Assessment 不刪 backup；未來只能在另一個明確確認流程中把凍結的 exact files 移到 macOS Trash。
+實際寫入前，App 必須：
 
-Physical compaction 只讀 page/freelist statistics。預設必須同時估計可回收至少 16 MiB 與 20% logical pages 才建議建立 explicit Preview；不得在一般 open/report/refresh 流程原地 `VACUUM`。未來 executor 必須先關閉 store、建立可回復 backup、建立與驗證獨立 replacement，再 replacement/readback；目前 assessment 永遠不授權 execution。
+1. 停止自己持有的 Codex transport，要求 Desktop、CLI、App Server 及編輯器整合退出。
+2. 驗證相關程序、五組 DB handle、檔案穩定觀察與 profile 條件；transaction 前再查。單次 lsof 零持有者不夠，短生命週期 writer 可能已關閉連線。
+3. 核對 schema、integrity、目標資格、容量與備份權限，取得整批共用的完整備份並驗證 hash 與可讀性。
+4. 所有 gate 通過後才建立一次 mutation claim；owner／容量等前置唯讀診斷不消耗 claim。
 
-History export 的 private default 只保留稽核所需的完整 native session ID、enum state、counts、bytes、timestamp 與結構化 error code。Session title、project ID、report/item 自由文字 error 預設不輸出；working directory 不存在於 operation history tables。Confirmation-token hash、manifest hash、provider inventory hash 與 protection hash 永遠不屬於 export model。CSV 所有欄位都做 RFC 4180 quoting，且以 `'` neutralize 可能被 spreadsheet 當成公式的開頭字元。較敏感文字只能由 caller 明確建立非預設 policy 才能加入，目前沒有 UI 暴露此選項。
+已確認但尚未準備計畫的 owner 阻擋，可關閉 Codex 後明確重新檢查同一批。已準備、已 claim、可能已執行、漂移或 unknown 不回到新確認或新計畫。ASM 的協作鎖不能約束不支援該鎖的舊版本或 Codex 程序。
 
-## Current guarantees
+## 分類、範圍與交易
 
-Test-only Fixture harness（不連結進 shipping App）：
+基本分類為 ordinary Category A、automation Category B，以及不支援的關聯形狀。檢查包括 inbox、timeline、scan entries、自動化 target、摘要、turns 與 items；多列或未知 shape 不能略過。
 
-- 不讀 `~/.codex`。
-- 不連 App Server。
-- 不執行 shell deletion。
-- 所有 mutation 只存在 test process 記憶體，重新啟動即回到 fixture。
-- Report note 明確標示沒有變更真實 agent session。
-- 多次 operation history 只存在 bounded in-memory ledger；test process退出即清空，不建立／寫入 production SQLite。Ledger 不保存 working directory、confirmation token、hashes 或 conversation content，且不宣稱 released bytes complete。
+- A：受支援的本機 catalog row，無自動化執行與其他受保護關聯；刪除精確 catalog row。
+- B：catalog 與唯一 automation run／definition 符合已驗證形狀；刪除 catalog，run 保留並改為 ARCHIVED／auto，整批同一執行時間。自動化定義、排程及啟用／暫停狀態不動。
+- 人工確認模式：僅另允許已知 session 摘要與受支援的暫停排程案例，仍不解除其他保護。每 session 最多 100 筆摘要，精確內容 hash 與數量都綁入確認；相同筆數但內容改變仍停止。
 
-Shipping App（Codex Live-only）：
+整個 Ghost batch 使用一個 BEGIN IMMEDIATE 交易，不做逐列 UI 迴圈。任一 precondition、row count 或回讀不符，交易 rollback。摘要清理涵蓋 attached DB，但不同 WAL 資料庫的交易不保證斷電時跨檔原子性；中斷後依證據判定，不宣稱必定全有或全無。
 
-- 只啟動官方 `codex app-server`。Read-only provider allowlist只有`initialize`、`initialized`、`config/read`、`thread/list`與明確readback使用的`thread/read`；獨立native Archive／Restore／Delete facade才能在各自persisted confirmation claim後多呼叫一次`thread/archive`／`thread/unarchive`／`thread/delete`，底層mutation transport不對App公開。
-- `thread/list` 固定使用 `useStateDbOnly=true`，避免預設 scan-and-repair。
-- 只列穩定 interactive sources，active / archived 分別沿 opaque cursor 讀到結束；每個 collection 有 10,000 筆 hard safety cap，重複 cursor 或截斷時顯示 degraded。
-- 不讀 rollout path 的內容或大小，不保存 conversation body。
-- read-only provider的archive / unarchive / delete execution capabilities仍全部為false；App只能透過operation-specific受限facade執行已稽核runtime的單筆或exact-selection batch lifecycle request。Manager-only coordinator只增刪本機Trash membership，沒有provider transport。
-- `SessionCapabilities` 分開表示 native interface 是否已由特定 runtime contract 驗證，以及 manager executor 是否可用；前者成立不會自動打開後者。
-- Live Archive toolbar action 先開啟 type-safe readiness review；逐項顯示 exact selection、runtime/checkpoint、readback、writer authority、protection、descendant 與 executor verdict。全部通過時才能建立 persisted Preview，再由獨立 sheet 要求使用者 review 並按下 explicit Confirm；Archive 不要求 typed token，readiness 畫面本身不送 lifecycle request。
-- `ArchiveAuthorizationCoordinator`、`ArchiveMutationExecutor`、mutation transport 與 `ArchiveExecutionRecoveryReconciler` 都是 Core internal；App 只能建構受限的 `CodexNativeArchiveCoordinator` 與 readback-only recovery facade。Coordinator 強制 Preview 先落盤並 claim 為不可 replay 的 `executing`；executor 只允許單筆、零 descendant、allow-listed runtime，request 最多一次；RPC acknowledgement 不算 success，readback 必須較新、完整、相同 runtime 與完整 native ID。Stale、timeout、missing 或 still-active acknowledgement 一律 unknown。Report 原子落盤後 consume Preview；若寫入失敗則保留 unresolved `executing`。下一次 Live refresh 先保留 claim checkpoint並取得完整 snapshot，recovery facade 驗證原 checkpoint/manifest 後只補寫 success/unknown Report；它型別上沒有 `archive()`，不能重送。證據不足保留 executing 供下次 readback；成功 consume 後才由第二次 normal refresh advance checkpoint。多筆 executing 記錄不會被自動挑選或縮小。
-- Native Restore 使用分離的 internal transport/executor與 public `CodexNativeRestoreCoordinator`。它接受單一 stable manager Archive 或 Trash、凍結 exact Archived identity/runtime/inventory/manifest/token；Trash 另凍結完整 membership set 與 durable `.remove` intent。最多送一次 `thread/unarchive`；只有較新的 Active readback是 success。成功時 membership removal、Report與 Preview consume同 transaction；failure/unknown保留 membership。Interrupted recovery只有 inventory capability，不能重送 Restore，但能依原 intent完成相同 finalization。Restore不要求 Archive-only protection clearance。
-- Active → Trash 使用 native Archive facade 與 durable `.add` intent。只有 fresh Archived readback success 才在 Report transaction加入 membership；Busy/failure/unknown都不建立 Trash。Crash recovery只讀、不重送 Archive，且仍遵守同一條 success-only finalization。
-- Permanent Delete只接受Manager Trash；Archive不得直接Delete。它要求pin與pinned-descendant evidence已知且clear、零descendant，任何positive pinned/running/current/pinned-descendant都阻擋。跨host running/current negative evidence未知時保留為`attemptMayFail`，不偽裝成clear，但可最多送一次official `thread/delete`。只有fresh complete inventory省略exact ID，且同runtime exact read同時回傳audited `-32600 / thread not loaded: <id>`才算success。Success時Trash removal、Deleted tombstone、Report與Preview consume同transaction；failure/unknown保留Trash。Recovery只有readback能力，不重送Delete；released bytes不估算。
-- Archive → Trash 與 Trash → Archive 必須先 durable frozen Preview；確認時 fresh official inventory 必須完整，checkpoint、manifest、selection membership 或 protection 任一漂移就整批 fail closed。SQLite membership、itemized Report、Preview consumption 必須同 transaction，commit 後逐項 readback。這條路徑沒有 provider transport。
-- 其他 UI lifecycle action 依selection、transition與capability禁用；core provider仍固定拒絕直接live lifecycle mutation。
-- Active + Manager Trash conflict 可 Apply Accept Native Restore：fresh complete inventory 仍須精確顯示 Active，且 durable Preview 的 runtime、inventory hash、manifest、完整 Trash membership set 與 token 全部相符；transaction 只移除 manager membership並原子寫 Report／consume Preview，Coordinator 沒有 provider transport。Reapply Trash Intent 與 Externally Missing resolution 仍只有 read-only proposal。
-- Complete list inventory 未觀察到 session 只代表 Externally Missing；沒有官方 exact-ID absence readback 時不得宣告 Deleted。
-- `thread/read` 成功、response ID 完全相符且 evidence kind 為 exact match 才能證明 Present。Failure 保存 typed kind 與 RPC code，但不解析自由文字來判斷 absence。即使 status 被設成 Absent，沒有官方來源、精確 runtime version、RPC code 全部相符的 `ExactSessionAbsenceContract`，`provesAbsence` 仍是 false。官方未定義穩定 not-found code 前，missing-ID RPC error、timeout、transport error 與 decode error全部是 Unavailable。
-- pin、current、pinned descendant 無法確認時明確標記 unavailable，不推定為 false。Running 只接受 `status.active` 的正向證據；非 active 不推定為未執行。Inspector 的每個欄位都顯示 Protected／Verified clear／Unavailable、來源與理由；只有 Verified clear 才是 mutation clearance evidence。
-- Descendant count 只在 all-source active / archived inventory 都完整時標記 verified；截斷或錯誤時 fail closed。
-- Project、Working Folder、Trust Folder 使用不同來源；Project 只能由 Desktop `local-projects` root 配對，Git origin 或 trust entry 不得冒充 Project。
+已選 catalog row 在 Final Review 前消失時，ID 仍保留：A 報 alreadyAbsent，B 即使 catalog 已無，仍完成必要的 run 封存。原本已無殘留的 ID 重新出現或重要證據漂移，整批停止。
 
-## Conditions before enabling live mutation
+catalog_revision 與 local sync-state observation_sequence 只增加**實際刪除的 catalog row 數**，不按選取數或 automation-only action 數增加；catalog row 自身同名欄位不是此 counter。watermark、未選 rows、自動化定義與 readback-only DB 必須不變。人工摘要模式唯一額外可改的是已凍結摘要範圍。
 
-- Readiness report 的所有項目都必須允許 attempt：positive protection、pinned unknown、pinned-descendant unknown 或一般 unavailable 一律 fail closed；只有 allow-listed Archive contract 的 writer/running/current unknown 可維持明示的 `attemptMayFail`。
-- Writer clearance 若宣稱 Verified clear，必須來自 exact-ID、runtime/inventory-hash/checkpoint-bound 的官方 lifecycle-host／all-relevant-hosts authority；獨立 stdio App Server 的 idle/notLoaded/readback 不足以解鎖。缺少 clearance 只能走一次 Busy-risk request，不能顯示為 clear。
-- Codex read-only inventory 能穩定取得 active / archived / pinned / running / current / descendant state。
-- 完成 protocol capture 與版本 compatibility matrix。
-- Reconciliation 與 persistence 有 migration/backup tests。
-- App Server archive / unarchive / delete 均有 success、failure、timeout-unknown、partial-result tests。
-- Preview expiry/hash 與 drift detection 完成。
-- Prepared Preview 先落盤、executor 結果再以 exact frozen item set 原子提交 Report／consume Preview 的 coordinator，以及 readback-only unresolved `executing` reconciliation 都已完成並接入 production refresh；可見 live acceptance 仍待 runtime pin contract。
-- Test-only isolated Archive harness 使用獨立 mutation opt-in、完整 UUID／title／cwd／confirmation 與 sacrificial naming gate；一般 live smoke 不會觸發。2026-08-13 已得到一次 verified rejection + Active readback；success path 尚未完成 live acceptance。
-- Current task 可被可靠排除。
-- 逐筆 readback 與 statistical report 完成。
-- 使用真實但可犧牲的 isolated fixture sessions 做人工驗收。
+### 哪些漂移需要停止
+
+ID／host 置換、automation identity／不受支援狀態、受保護關聯、schema、integrity 或資格證據改變會停止。title、cwd、read state、recency、observation 與非資格相關時間等顯示／同步 metadata 不能單獨取消整批確認。
+
+掃描與執行前核對使用相同 canonical evidence representation，不能比較 raw whole-row hash 與 redacted whole-row hash。完整來源由驗證備份保護；不以寬鬆顯示欄位規則略過真正的目標漂移。
+
+## 大量批次的產品完成條件
+
+產品要一次掃描、分類、選取、確認並清除大量 Ghost，不能退化成逐筆右鍵或 1–2 筆 canary。初始 frozen Preview／executor 上限為 500；未經新的資源證據與使用者同意，不能降到 148 以下。
+
+必須具備：
+
+- 自動偵測與分類；Select All Eligible、累積 checkbox、selected-only、總選取數與阻擋原因。
+- 單一 frozen manifest，綁定整組 ID、分類、預期效果、版本／schema 與保護證據；不 silent shrink。
+- 一次整批確認與共用驗證備份；Preview、challenge、receipt、Final Review 是內部步驟，不要求逐筆 token、Snapshot、貼 UUID 或人工比 hash。
+- 混合 A／B／alreadyAbsent 的整批交易，以及完整逐筆 success、failure、unknown、notAttempted 回報。
+- 確定性測試含精確 148 筆混合案例，另覆蓋 1、2、10、500、超限、任一筆漂移、busy、中斷與冷啟動恢復。
+- 既有 Ghost 大量清理之後，另驗證正常 session 經 App Delete、官方回讀、Desktop 回讀及 Codex cold start 不留下新 Ghost，才可宣稱整個產品目標完成。
+
+歷史手動大量清理、新 App 小批次實測與大量隔離測試是不同證據，不能合併宣稱大量 App 實機驗收完成。實際完成與缺口只更新驗收狀態。
+
+安全檢查由 App 承擔，不增加長篇人工實驗。真實資料 gate 不阻擋一般 UI、fixture 或隔離程式開發；Codex 仍開啟也不是停止產品實作的理由。沒有影響結果的新問題，不新增實驗、換 DMG／token 重跑或擅自選真實對話補測。
+
+## 全域設定清理白名單
+
+只在對話清理成功後，另凍結及確認 diff，移除下列位置中精確歸屬所選 ID 的資料：
+
+- 根層 map：thread-project-assignments、thread-workspace-root-hints、thread-projectless-output-directories、thread-writable-roots。
+- 根層 ID 陣列：projectless-thread-ids。
+- electron-persisted-atom-state 下的 map：prompt-history、heartbeat-thread-permissions-by-id、thread-descriptions-v1。
+
+主檔與 .bak 分別審閱。未知格式停止，不遞迴刪除所有字串命中，也不動全域專案定義、其他對話、自動化排程或工作資料夾。預覽在記憶體保留五分鐘，來源 bytes 改變就失效；取消或無變更不建立備份。
+
+套用前重驗缺席、owner、來源與備份；每份 JSON 原子更新，但兩檔可能部分完成。pending／verified 記錄與私人備份保留，不自動重試、還原或隨 30 天 Report 清理。差異不得進一般 log 或公開 repository。
+
+## 停止、恢復與保存證據
+
+claim 後不能 retry、換 SQL、自動 restore、縮小 selection 或以新操作覆蓋 unknown。恢復與未執行計畫關閉各有獨立、精確綁定的 manager 流程，見[架構](ARCHITECTURE.md)。
+
+備份不能直接蓋回正在使用的資料庫；WAL／SHM／journal 與新主檔不匹配可能損壞資料。還原需專門的關閉、備份與驗證流程，不在失敗時自動執行。
+
+清除 Deleted 清單只保存顯示移除標記，不刪內部復原證據，也不把 unknown 改成 success。實體完成紀錄清理仍只處理有完整成功證據的群組，保留未解狀態與最小防重複標記，見[資料庫](SQLITE_SCHEMA.md)。磁碟釋放量只報已驗證數字，未知不估算；備份仍有私人資料時不宣稱安全抹除。

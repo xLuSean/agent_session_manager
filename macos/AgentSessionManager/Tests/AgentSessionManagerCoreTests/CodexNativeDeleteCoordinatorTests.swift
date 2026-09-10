@@ -54,6 +54,56 @@ final class CodexNativeDeleteCoordinatorTests: XCTestCase {
         XCTAssertEqual(counts.deleteIDs, [nativeID])
     }
 
+    func testRunningCodexBlocksBeforeClaimOrDeleteRequest() async throws {
+        let fixture = try makeFixture()
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try seed(fixture, into: store)
+        let transport = DeleteTransportStub(
+            preflight: fixture.snapshot,
+            readback: emptySnapshot(observedAt: observedAt.addingTimeInterval(40)),
+            exact: .absent(
+                nativeSessionID: nativeID,
+                observedAt: observedAt.addingTimeInterval(40),
+                runtimeVersion: runtime
+            )
+        )
+        let gate = LifecycleExecutionGateStub(
+            error: .codexDesktopRunning(processKinds: [.codexApplication])
+        )
+        let coordinator = makeCoordinator(
+            store: store,
+            transport: transport,
+            executionGate: gate
+        )
+        let preview = try await coordinator.prepare(
+            managerKey: fixture.session.id,
+            snapshot: fixture.snapshot,
+            checkpoint: fixture.checkpoint
+        )
+
+        do {
+            _ = try await coordinator.execute(
+                preview: preview,
+                confirmationToken: preview.confirmationToken
+            )
+            XCTFail("Running Codex must block before Delete Preview claim.")
+        } catch let error as CodexLifecycleExecutionGateError {
+            XCTAssertEqual(
+                error,
+                .codexDesktopRunning(processKinds: [.codexApplication])
+            )
+        }
+
+        XCTAssertEqual(try store.operationPreview(id: preview.id)?.status, .prepared)
+        let gateCalls = await gate.observedCallCount()
+        XCTAssertEqual(gateCalls, 1)
+        let counts = await transport.callCounts()
+        XCTAssertEqual(counts.inventory, 0)
+        XCTAssertEqual(counts.delete, 0)
+        XCTAssertEqual(counts.exactRead, 0)
+    }
+
     func testUnknownCrossHostRunningAndCurrentCanAttemptDeleteOnce() async throws {
         let protection = SessionProtection(
             isRunningKnown: false,
@@ -467,11 +517,13 @@ final class CodexNativeDeleteCoordinatorTests: XCTestCase {
 
     private func makeCoordinator(
         store: SQLiteStateStore,
-        transport: DeleteTransportStub
+        transport: DeleteTransportStub,
+        executionGate: any CodexLifecycleExecutionChecking = LifecycleExecutionGateStub()
     ) -> CodexNativeDeleteCoordinator {
         CodexNativeDeleteCoordinator(
             store: store,
             transport: transport,
+            executionGate: executionGate,
             now: { self.observedAt.addingTimeInterval(30) },
             makePreviewID: { self.previewID },
             makeReportID: { self.reportID }

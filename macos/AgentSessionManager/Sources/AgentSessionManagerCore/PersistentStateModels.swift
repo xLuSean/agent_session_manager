@@ -42,6 +42,7 @@ public enum PersistentStateError: Error, Equatable, LocalizedError {
 public struct ProviderCheckpointRecord: Codable, Equatable, Sendable {
     public let provider: AgentSystem
     public let runtimeVersion: String?
+    public let compatibilityBinding: CodexCompatibilityBinding?
     public let inventoryHash: String
     public let refreshedAt: Date
     public let inventoryComplete: Bool
@@ -52,6 +53,7 @@ public struct ProviderCheckpointRecord: Codable, Equatable, Sendable {
     public init(
         provider: AgentSystem,
         runtimeVersion: String? = nil,
+        compatibilityBinding: CodexCompatibilityBinding? = nil,
         inventoryHash: String,
         refreshedAt: Date,
         inventoryComplete: Bool,
@@ -61,8 +63,9 @@ public struct ProviderCheckpointRecord: Codable, Equatable, Sendable {
     ) {
         self.provider = provider
         self.runtimeVersion = runtimeVersion
+        self.compatibilityBinding = compatibilityBinding
         self.inventoryHash = inventoryHash
-        self.refreshedAt = refreshedAt
+        self.refreshedAt = PersistentTimestamp.canonical(refreshedAt)
         self.inventoryComplete = inventoryComplete
         self.protectionComplete = protectionComplete
         self.lastErrorCode = lastErrorCode
@@ -247,6 +250,11 @@ public struct PersistentOperationPreview: Codable, Equatable, Sendable {
     /// Manager-owned effect committed only after successful native readback.
     /// `nil` preserves schema v1-v4 Preview semantics.
     public let trashMembershipMutation: TrashMembershipMutation?
+    /// Frozen hash of the complete manager Trash membership set when a native
+    /// Archive is reapplying an already-existing Trash intent. This is not a
+    /// mutation instruction: claim and Report persistence must prove the exact
+    /// manager-owned intent remains unchanged.
+    public let expectedTrashMembershipSetHash: String?
     public let createdAt: Date
     public let expiresAt: Date
     public let items: [PersistentPreviewItem]
@@ -261,6 +269,7 @@ public struct PersistentOperationPreview: Codable, Equatable, Sendable {
         providerInventoryHash: String,
         affectedSetHash: String? = nil,
         trashMembershipMutation: TrashMembershipMutation? = nil,
+        expectedTrashMembershipSetHash: String? = nil,
         createdAt: Date,
         expiresAt: Date,
         items: [PersistentPreviewItem]
@@ -274,6 +283,7 @@ public struct PersistentOperationPreview: Codable, Equatable, Sendable {
         self.providerInventoryHash = providerInventoryHash
         self.affectedSetHash = affectedSetHash
         self.trashMembershipMutation = trashMembershipMutation
+        self.expectedTrashMembershipSetHash = expectedTrashMembershipSetHash
         self.createdAt = createdAt
         self.expiresAt = expiresAt
         self.items = items

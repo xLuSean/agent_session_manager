@@ -16,7 +16,7 @@ final class LifecycleMutationReadinessTests: XCTestCase {
 
         XCTAssertTrue(readiness.isEvidenceReady)
         XCTAssertFalse(readiness.isExecutionEnabled)
-        XCTAssertEqual(readiness.primaryBlockedReason, "The manager Archive executor is not implemented or authorized yet; no native mutation will run.")
+        XCTAssertEqual(readiness.primaryBlockedReason, "The Archive executor is unavailable; no Archive request will be sent.")
         XCTAssertEqual(readiness.items.last?.requirement, .executor)
         XCTAssertEqual(readiness.items.last?.verdict, .blocked)
     }
@@ -234,10 +234,91 @@ final class LifecycleMutationReadinessTests: XCTestCase {
     func testLifecycleContractIsAllowListedToAuditedRuntime() {
         XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.147.0"))
         XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.147.0-alpha.6.5"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.148.0"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.148.0-alpha.21"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.149.0"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.149.0-alpha.1"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.152.1"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.152.1-alpha.1"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.153.1"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.153.2"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.153.2-alpha.1"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.153.4"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.153.4-alpha.1"))
         XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.146.0"))
-        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.148.0"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.150.0"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.152.2"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.153.3"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.153.5"))
         XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.147.01"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.148.01"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract("0.149.01"))
         XCTAssertFalse(CodexAppServerProvider.supportsVerifiedLifecycleContract(nil))
+    }
+
+    func testDeleteContractRemainsSeparatelyAllowListed() {
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedDeleteContract("0.147.0"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedDeleteContract("0.147.0-alpha.6.5"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.148.0"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.148.0-alpha.21"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.149.0"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.149.0-alpha.1"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.152.1"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.153.1"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.153.2"))
+        XCTAssertTrue(CodexAppServerProvider.supportsVerifiedDeleteContract("0.153.4"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.153.3"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.153.4-alpha.1"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract("0.153.5"))
+        XCTAssertFalse(CodexAppServerProvider.supportsVerifiedDeleteContract(nil))
+    }
+
+    func testLifecycleCompatibilityExplainsExactOperationRuntimeAndZeroRequest() {
+        XCTAssertNil(
+            CodexLifecycleMutationKind.moveToTrash.compatibilityBlockedReason(
+                runtimeVersion: "0.149.0"
+            )
+        )
+        XCTAssertEqual(
+            CodexLifecycleMutationKind.permanentDelete.compatibilityBlockedReason(
+                runtimeVersion: "0.149.0"
+            ),
+            "Permanent Delete is unavailable because Codex runtime 0.149.0 is outside this version of Agent Session Manager's audited Permanent Delete allow-list. Open Settings → Compatibility and run the isolated tests to verify this installation. No Permanent Delete request was sent."
+        )
+        XCTAssertEqual(
+            CodexLifecycleMutationKind.restore.compatibilityBlockedReason(
+                runtimeVersion: nil
+            ),
+            "Restore is unavailable because the current Codex runtime version could not be verified. No Restore request was sent. Refresh Codex Live and try again."
+        )
+        XCTAssertNil(
+            CodexLifecycleMutationKind.archive.compatibilityBlockedReason(
+                runtimeVersion: "0.149.0"
+            )
+        )
+        XCTAssertNil(
+            CodexLifecycleMutationKind.restore.compatibilityBlockedReason(
+                runtimeVersion: "0.149.0-alpha.1"
+            )
+        )
+    }
+
+    func testExternalDeletionReadbackHasSeparateAuditedAllowList() {
+        XCTAssertTrue(
+            CodexAppServerProvider.supportsVerifiedExternalDeletionReadbackContract("0.147.0")
+        )
+        XCTAssertTrue(
+            CodexAppServerProvider.supportsVerifiedExternalDeletionReadbackContract("0.148.0")
+        )
+        XCTAssertTrue(
+            CodexAppServerProvider.supportsVerifiedExternalDeletionReadbackContract("0.148.0-alpha.21")
+        )
+        XCTAssertFalse(
+            CodexAppServerProvider.supportsVerifiedExternalDeletionReadbackContract("0.149.0")
+        )
+        XCTAssertFalse(
+            CodexAppServerProvider.supportsVerifiedExternalDeletionReadbackContract(nil)
+        )
     }
 
     private func verdict(

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>ASMReleaseSuffix</key><string>$(ASM_RELEASE_SUFFIX)</string>
+    <key>ASMSourceCommit</key><string>$(ASM_SOURCE_COMMIT)</string>
+    <key>ASMSourceTree</key><string>$(ASM_SOURCE_TREE)</string>
+</dict></plist>

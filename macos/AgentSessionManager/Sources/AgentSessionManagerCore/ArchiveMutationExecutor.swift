@@ -4,6 +4,7 @@ import Foundation
 protocol ArchiveMutationTransport: Sendable {
     func inventorySnapshot() async throws -> ProviderInventorySnapshot
     func archive(nativeSessionID: String) async throws
+    func archive(nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws
 }
 
 enum CodexProviderInventorySnapshotBuilder {
@@ -15,7 +16,8 @@ enum CodexProviderInventorySnapshotBuilder {
             provider: .codex,
             sessions: sessions,
             archiveScopeNodes: archiveScope.nodes,
-            archiveScopeComplete: archiveScope.isComplete
+            archiveScopeComplete: archiveScope.isComplete,
+            compatibilityBinding: snapshot.compatibilityBinding
         )
         let pinStateComplete = sessions.allSatisfy { $0.protection.isPinnedKnown }
         let runningStateComplete = !sessions.isEmpty && sessions.allSatisfy {
@@ -30,6 +32,7 @@ enum CodexProviderInventorySnapshotBuilder {
         return ProviderInventorySnapshot(
             provider: .codex,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: snapshot.compatibilityBinding,
             inventoryHash: inventoryHash,
             observedAt: snapshot.refreshedAt,
             inventoryComplete: !snapshot.isTruncated,
@@ -59,7 +62,11 @@ actor CodexArchiveMutationTransport: ArchiveMutationTransport {
     }
 
     func archive(nativeSessionID: String) async throws {
-        try await source.archive(threadID: nativeSessionID)
+        try await archive(nativeSessionID: nativeSessionID, expectedCompatibility: nil)
+    }
+
+    func archive(nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws {
+        try await source.archive(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
     }
 }
 
@@ -172,13 +179,38 @@ enum ArchiveExecutionHasher {
         operation: PersistentOperation,
         providerInventoryHash: String,
         runtimeVersion: String,
+        compatibilityBinding: CodexCompatibilityBinding? = nil,
         reconciliationTimestamp: Date,
         createdAt: Date,
         expiresAt: Date,
         affectedSetHash: String? = nil,
         trashMembershipMutation: TrashMembershipMutation? = nil,
+        expectedTrashMembershipSetHash: String? = nil,
         items: [PersistentPreviewItem]
     ) throws -> String {
+        if let compatibilityBinding {
+            let unboundHash = try manifestHash(provider: provider, operation: operation,
+                providerInventoryHash: providerInventoryHash, runtimeVersion: runtimeVersion,
+                reconciliationTimestamp: reconciliationTimestamp, createdAt: createdAt, expiresAt: expiresAt,
+                affectedSetHash: affectedSetHash, trashMembershipMutation: trashMembershipMutation,
+                expectedTrashMembershipSetHash: expectedTrashMembershipSetHash, items: items)
+            return try digest(BoundManifestPayload(manifestHash: unboundHash, compatibilityBinding: compatibilityBinding))
+        }
+        if let expectedTrashMembershipSetHash {
+            return try digest(ManifestPayloadV3(
+                provider: provider,
+                operation: operation,
+                providerInventoryHash: providerInventoryHash,
+                runtimeVersion: runtimeVersion,
+                reconciliationTimestamp: persistentTimestamp(reconciliationTimestamp),
+                createdAt: persistentTimestamp(createdAt),
+                expiresAt: persistentTimestamp(expiresAt),
+                affectedSetHash: affectedSetHash,
+                trashMembershipMutation: trashMembershipMutation,
+                expectedTrashMembershipSetHash: expectedTrashMembershipSetHash,
+                items: items.sorted { $0.managerKey < $1.managerKey }
+            ))
+        }
         if let trashMembershipMutation {
             return try digest(ManifestPayloadV2(
                 provider: provider,
@@ -227,6 +259,11 @@ enum ArchiveExecutionHasher {
         "sha256:" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    private struct BoundManifestPayload: Encodable {
+        let manifestHash: String
+        let compatibilityBinding: CodexCompatibilityBinding
+    }
+
     private struct ProtectionPayload: Encodable {
         let provider: AgentSystem
         let nativeSessionID: String
@@ -257,6 +294,20 @@ enum ArchiveExecutionHasher {
         let expiresAt: String
         let affectedSetHash: String?
         let trashMembershipMutation: TrashMembershipMutation
+        let items: [PersistentPreviewItem]
+    }
+
+    private struct ManifestPayloadV3: Encodable {
+        let provider: AgentSystem
+        let operation: PersistentOperation
+        let providerInventoryHash: String
+        let runtimeVersion: String
+        let reconciliationTimestamp: String
+        let createdAt: String
+        let expiresAt: String
+        let affectedSetHash: String?
+        let trashMembershipMutation: TrashMembershipMutation?
+        let expectedTrashMembershipSetHash: String
         let items: [PersistentPreviewItem]
     }
 }
@@ -300,7 +351,7 @@ actor ArchiveMutationExecutor {
 
         var acknowledgementError: Error?
         do {
-            try await transport.archive(nativeSessionID: item.nativeSessionID)
+            try await transport.archive(nativeSessionID: item.nativeSessionID, expectedCompatibility: checkpoint.compatibilityBinding)
         } catch {
             // The request may have reached App Server. Never retry it blindly;
             // proceed directly to one authoritative inventory readback.
@@ -340,7 +391,7 @@ actor ArchiveMutationExecutor {
         confirmationToken: String
     ) throws -> PersistentPreviewItem {
         guard preview.provider == .codex, checkpoint.provider == .codex else {
-            throw ArchiveExecutionError.invalidPreview("the first executor slice accepts only Codex")
+            throw ArchiveExecutionError.invalidPreview("Archive supports only Codex sessions")
         }
         guard (preview.operation == .archive || preview.operation == .moveToTrash),
               preview.status == .executing else {
@@ -370,7 +421,7 @@ actor ArchiveMutationExecutor {
               !runtimeVersion.isEmpty else {
             throw ArchiveExecutionError.checkpointMismatch("Preview inventory or runtime binding is unavailable")
         }
-        guard CodexAppServerProvider.supportsVerifiedLifecycleContract(runtimeVersion) else {
+        guard CodexLifecycleMutationKind.archive.supports(runtimeVersion: runtimeVersion, binding: checkpoint.compatibilityBinding) else {
             throw ArchiveExecutionError.checkpointMismatch("runtime is outside the verified Archive contract")
         }
         let manifestHash = try ArchiveExecutionHasher.manifestHash(
@@ -378,11 +429,13 @@ actor ArchiveMutationExecutor {
             operation: preview.operation,
             providerInventoryHash: preview.providerInventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: checkpoint.compatibilityBinding,
             reconciliationTimestamp: checkpoint.refreshedAt,
             createdAt: preview.createdAt,
             expiresAt: preview.expiresAt,
             affectedSetHash: preview.affectedSetHash,
             trashMembershipMutation: preview.trashMembershipMutation,
+            expectedTrashMembershipSetHash: preview.expectedTrashMembershipSetHash,
             items: preview.items
         )
         guard manifestHash == preview.manifestHash else {
@@ -403,7 +456,8 @@ actor ArchiveMutationExecutor {
         guard snapshot.inventoryComplete else {
             throw ArchiveExecutionError.preflightUnavailable("inventory coverage is incomplete")
         }
-        guard snapshot.runtimeVersion == checkpoint.runtimeVersion else {
+        guard snapshot.runtimeVersion == checkpoint.runtimeVersion,
+              snapshot.compatibilityBinding == checkpoint.compatibilityBinding else {
             throw ArchiveExecutionError.stateDrift("runtime version changed")
         }
         // The provider inventory hash covers every Codex session, including
@@ -444,7 +498,8 @@ actor ArchiveMutationExecutor {
     ) -> ArchiveExecutionResult {
         guard snapshot.provider == .codex,
               snapshot.inventoryComplete,
-              snapshot.runtimeVersion == checkpoint.runtimeVersion else {
+              snapshot.runtimeVersion == checkpoint.runtimeVersion,
+              snapshot.compatibilityBinding == checkpoint.compatibilityBinding else {
             return unknownResult(
                 preview: preview,
                 item: item,

@@ -74,13 +74,14 @@ actor ArchiveExecutionRecoveryReconciler {
     }
 
     private func reconcile(
-        context: (preview: PersistentOperationPreview, runtimeVersion: String),
+        context: (preview: PersistentOperationPreview, runtimeVersion: String, compatibilityBinding: CodexCompatibilityBinding?),
         snapshot: ProviderInventorySnapshot
     ) throws -> PersistentOperationReport {
         let evidence = try classify(
             snapshot: snapshot,
             preview: context.preview,
-            expectedRuntimeVersion: context.runtimeVersion
+            expectedRuntimeVersion: context.runtimeVersion,
+            expectedCompatibility: context.compatibilityBinding
         )
         let report = makeReport(
             preview: context.preview,
@@ -100,7 +101,7 @@ actor ArchiveExecutionRecoveryReconciler {
 
     private func loadContext(
         previewID: UUID
-    ) throws -> (preview: PersistentOperationPreview, runtimeVersion: String) {
+    ) throws -> (preview: PersistentOperationPreview, runtimeVersion: String, compatibilityBinding: CodexCompatibilityBinding?) {
         guard let preview = try store.operationPreview(id: previewID) else {
             throw ArchiveExecutionRecoveryError.invalidPreview("the exact persisted Preview does not exist")
         }
@@ -133,7 +134,7 @@ actor ArchiveExecutionRecoveryReconciler {
                 "the persisted Codex runtime identity is missing"
             )
         }
-        guard CodexAppServerProvider.supportsVerifiedLifecycleContract(runtimeVersion) else {
+        guard CodexLifecycleMutationKind.archive.supports(runtimeVersion: runtimeVersion, binding: checkpoint.compatibilityBinding) else {
             throw ArchiveExecutionRecoveryError.checkpointUnavailable(
                 "runtime \(runtimeVersion) is outside the verified lifecycle contract"
             )
@@ -149,11 +150,13 @@ actor ArchiveExecutionRecoveryReconciler {
             operation: preview.operation,
             providerInventoryHash: preview.providerInventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: checkpoint.compatibilityBinding,
             reconciliationTimestamp: checkpoint.refreshedAt,
             createdAt: preview.createdAt,
             expiresAt: preview.expiresAt,
             affectedSetHash: preview.affectedSetHash,
             trashMembershipMutation: preview.trashMembershipMutation,
+            expectedTrashMembershipSetHash: preview.expectedTrashMembershipSetHash,
             items: preview.items
         )
         guard expectedManifestHash == preview.manifestHash else {
@@ -161,13 +164,14 @@ actor ArchiveExecutionRecoveryReconciler {
                 "the original claim checkpoint no longer validates the frozen manifest"
             )
         }
-        return (preview, runtimeVersion)
+        return (preview, runtimeVersion, checkpoint.compatibilityBinding)
     }
 
     private func classify(
         snapshot: ProviderInventorySnapshot,
         preview: PersistentOperationPreview,
-        expectedRuntimeVersion: String
+        expectedRuntimeVersion: String,
+        expectedCompatibility: CodexCompatibilityBinding?
     ) throws -> RecoveryEvidence {
         guard snapshot.provider == .codex else {
             throw ArchiveExecutionRecoveryError.evidenceUnavailable("provider identity mismatch")
@@ -178,7 +182,8 @@ actor ArchiveExecutionRecoveryReconciler {
             )
         }
         guard snapshot.runtimeVersion == expectedRuntimeVersion,
-              CodexAppServerProvider.supportsVerifiedLifecycleContract(expectedRuntimeVersion) else {
+              snapshot.compatibilityBinding == expectedCompatibility,
+              CodexLifecycleMutationKind.archive.supports(runtimeVersion: expectedRuntimeVersion, binding: expectedCompatibility) else {
             throw ArchiveExecutionRecoveryError.evidenceUnavailable(
                 "runtime identity changed from the persisted verified contract"
             )

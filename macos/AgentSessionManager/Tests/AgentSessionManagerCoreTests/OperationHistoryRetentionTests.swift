@@ -4,6 +4,112 @@ import Foundation
 import XCTest
 
 final class OperationHistoryRetentionTests: XCTestCase {
+    func testDeletedListRemovalAcceptsLegacyAndPartialBatchAndPersists() throws {
+        let url = makeDatabaseURL(named: #function)
+        let store = try SQLiteStateStore(databaseURL: url)
+        try seedDeletedListRows(store)
+        let before = try store.deletedSessions(for: .codex)
+        let preview = try store.prepareDeletedListClear(selectedManagerKeys: ["codex:old-a"])
+        XCTAssertEqual(preview.recordCount, 1)
+        try store.clearDeletedList(preview)
+        XCTAssertEqual(try store.visibleDeletedSessions(for: .codex).map(\.nativeSessionID), ["old-b"])
+        XCTAssertEqual(try store.deletedSessions(for: .codex), before, "Internal recovery evidence must be untouched")
+        XCTAssertTrue(try store.prepareDeletedListClear(selectedManagerKeys: []).isEmpty)
+        store.close()
+        let reopened = try SQLiteStateStore(databaseURL: url)
+        defer { reopened.close() }
+        XCTAssertEqual(try reopened.visibleDeletedSessions(for: .codex).count, 1)
+        try reopened.clearDeletedList(reopened.prepareDeletedListClear())
+        XCTAssertTrue(try reopened.visibleDeletedSessions(for: .codex).isEmpty)
+        XCTAssertEqual(try reopened.deletedSessions(for: .codex), before)
+        XCTAssertTrue(try reopened.prepareCompletedHistoryClear().isEmpty, "List dismissal must not authorize report cleanup")
+    }
+
+    func testDeletedListConfirmationRejectsDriftExpiryAndWrongDatabase() throws {
+        let store = try SQLiteStateStore(databaseURL: makeDatabaseURL(named: #function))
+        let other = try SQLiteStateStore(databaseURL: makeDatabaseURL(named: "other"))
+        defer { store.close(); other.close() }
+        try seedDeletedListRows(store)
+        let now = Date()
+        let preview = try store.prepareDeletedListClear(now: now)
+        XCTAssertThrowsError(try store.clearDeletedList(preview, now: now.addingTimeInterval(300)))
+        XCTAssertThrowsError(try other.clearDeletedList(preview, now: now))
+        try store.withLockedDatabase { db in
+            try store.execute("UPDATE deleted_sessions SET title_at_deletion = 'changed' WHERE native_session_id = 'old-b'", values: [], database: db)
+        }
+        XCTAssertThrowsError(try store.clearDeletedList(preview, now: now))
+        XCTAssertEqual(try store.visibleDeletedSessions(for: .codex).count, 2)
+    }
+
+    private func seedDeletedListRows(_ store: SQLiteStateStore) throws {
+        try store.upsertProviderCheckpoint(checkpoint(provider: .codex, hash: "inventory"))
+        try store.withLockedDatabase { db in
+            for id in ["old-a", "old-b"] {
+                try store.execute("""
+                    INSERT INTO deleted_sessions(provider, native_session_id, manager_key, title_at_deletion,
+                        provider_inventory_hash_at_deletion, deleted_at, delete_report_id)
+                    VALUES ('codex', ?, ?, 'Old record', 'inventory', '1970-01-01T00:00:01.000Z', ?)
+                    """, values: [.text(id), .text("codex:" + id), .text(uuid(900).uuidString.lowercased())], database: db)
+            }
+        }
+    }
+
+    func testUnknownReportsSurviveBothCountAndAgeRetentionAndManualClear() throws {
+        let store = try SQLiteStateStore(databaseURL: makeDatabaseURL(named: #function),
+            historyRetentionPolicy: .init(maximumReportsPerProvider: 1))
+        defer { store.close() }
+        let checkpoint = checkpoint(provider: .codex, hash: "inventory")
+        for number in 1...4 {
+            let entry = bundle(number: number, provider: .codex, checkpoint: checkpoint,
+                completedAt: date(Double(number * 10)), outcome: number <= 2 ? .unknown : .success)
+            _ = try save(entry, checkpoint: checkpoint, to: store)
+        }
+        XCTAssertNotNil(try store.operationReport(id: uuid(1_001)))
+        XCTAssertNotNil(try store.operationReport(id: uuid(1_002)))
+        XCTAssertNil(try store.operationReport(id: uuid(1_003)))
+        XCTAssertThrowsError(try store.clearOperationHistory(reportIDs: [uuid(1_001)], provider: .codex,
+            confirmationToken: "clear", expectedConfirmationToken: "clear"))
+        XCTAssertEqual(try store.pruneCompletedHistory(now: date(31 * 24 * 60 * 60)).reportCount, 1)
+        XCTAssertNotNil(try store.operationReport(id: uuid(1_001)))
+        XCTAssertNotNil(try store.operationReport(id: uuid(1_002)))
+    }
+
+    func testSuccessfulArchiveBatchClearsAsOneGroup() throws {
+        let store = try SQLiteStateStore(databaseURL: makeDatabaseURL(named: #function))
+        defer { store.close() }
+        let checkpoint = checkpoint(provider: .codex, hash: "inventory")
+        let entry = bundle(number: 1, provider: .codex, checkpoint: checkpoint, completedAt: date(10))
+        _ = try save(entry, checkpoint: checkpoint, to: store)
+        let previewID = entry.preview.id.uuidString.lowercased()
+        try store.withLockedDatabase { db in
+            try store.execute("""
+                INSERT INTO archive_batch_plans VALUES ('batch', 'codex', 'consumed', 'inventory', 'token', 'manifest',
+                    '1970-01-01T00:00:01.000Z', '1970-01-01T00:00:09.000Z', 1, 1)
+                """, values: [], database: db)
+            try store.execute("""
+                INSERT INTO archive_batch_units VALUES ('batch', 0, ?, 'codex:session-1', 'session-1', 'hash', 'success', NULL, NULL)
+                """, values: [.text(previewID)], database: db)
+            try store.execute("""
+                INSERT INTO archive_batch_items VALUES ('batch', 0, 0, ?, 'codex:session-1', 'session-1', 'success', 'archived',
+                    '1970-01-01T00:00:10.000Z', NULL, NULL)
+                """, values: [.text(previewID)], database: db)
+            try store.execute("""
+                INSERT INTO archive_batch_reports VALUES ('batch-report', 'batch', 'success',
+                    '1970-01-01T00:00:01.000Z', '1970-01-01T00:00:10.000Z', 1, 0, NULL, NULL)
+                """, values: [], database: db)
+        }
+        let preview = try store.prepareCompletedHistoryClear()
+        XCTAssertEqual(preview.reportCount, 2)
+        try store.clearCompletedHistory(preview)
+        XCTAssertNil(try store.operationReport(id: entry.report.id))
+        for table in ["archive_batch_plans", "archive_batch_units", "archive_batch_items", "archive_batch_reports"] {
+            let count = try store.withLockedDatabase { db in
+                try store.query("SELECT COUNT(*) FROM \(table)", values: [], database: db) { sqlite3_column_int64($0, 0) }[0]
+            }
+            XCTAssertEqual(count, 0)
+        }
+    }
+
     func testAutomaticRetentionPrunesWholeOldestBundleAndPreservesOtherState() throws {
         let databaseURL = makeDatabaseURL(named: #function)
         let store = try SQLiteStateStore(
@@ -297,7 +403,8 @@ final class OperationHistoryRetentionTests: XCTestCase {
         number: Int,
         provider: AgentSystem,
         checkpoint: ProviderCheckpointRecord,
-        completedAt: Date
+        completedAt: Date,
+        outcome: PersistentReportOutcome = .success
     ) -> Bundle {
         let preview = preview(
             number: number,
@@ -312,15 +419,15 @@ final class OperationHistoryRetentionTests: XCTestCase {
                 previewID: preview.id,
                 provider: provider,
                 operation: .archive,
-                outcome: .success,
+                outcome: outcome,
                 startedAt: completedAt.addingTimeInterval(-1),
                 completedAt: completedAt,
                 releasedBytesComplete: true,
                 items: [
                     PersistentReportItem(
                         managerKey: "\(provider.rawValue):session-\(number)",
-                        outcome: .success,
-                        observedNativeState: .archived,
+                        outcome: outcome == .success ? .success : .unknown,
+                        observedNativeState: outcome == .success ? .archived : .unavailable,
                         verifiedReleasedBytes: 0,
                         evidenceAt: completedAt
                     ),

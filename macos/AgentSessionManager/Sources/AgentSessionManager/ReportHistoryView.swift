@@ -82,7 +82,7 @@ struct ReportHistoryView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Clear Filtered Reports…", role: .destructive) {
+            Button("Clear Completed Reports…", role: .destructive) {
                 Task { await prepareClear() }
             }
             .disabled(entries.isEmpty || isWorking)
@@ -461,8 +461,16 @@ struct ReportHistoryView: View {
                 localError = "Narrow the filters to one Provider before clearing Live Report history."
                 return
             }
+            let allowedIDs = try model.clearableOperationReportIDs(provider: providers.first!)
+            let matchedIDs = Set(matchingEntries.map(\.reportID))
+            let clearableIDs = matchedIDs.intersection(allowedIDs)
+            guard !clearableIDs.isEmpty else {
+                statusMessage = "No safely completed standalone reports match. Unresolved reports are kept; clear linked completed batches from Deleted → Clear Completed Operation History."
+                return
+            }
+            statusMessage = "\(matchedIDs.count - clearableIDs.count) protected or linked reports will be kept."
             clearPreview = ReportHistoryClearPreview(
-                reportIDs: Set(matchingEntries.map(\.reportID)),
+                reportIDs: clearableIDs,
                 provider: providers.first,
                 confirmationToken: "CLEAR-REPORTS-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12))"
             )

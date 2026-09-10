@@ -265,6 +265,7 @@ enum ArchiveAffectedSetPreviewFactory {
         snapshot: ProviderInventorySnapshot,
         operation: PersistentOperation = .archive,
         trashMembershipMutation: TrashMembershipMutation? = nil,
+        expectedTrashMembershipSetHash: String? = nil,
         confirmationToken: String,
         previewID: UUID,
         createdAt: Date,
@@ -306,11 +307,13 @@ enum ArchiveAffectedSetPreviewFactory {
             operation: operation,
             providerInventoryHash: snapshot.inventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: snapshot.compatibilityBinding,
             reconciliationTimestamp: snapshot.observedAt,
             createdAt: createdAt,
             expiresAt: expiresAt,
             affectedSetHash: affectedSetHash,
             trashMembershipMutation: trashMembershipMutation,
+            expectedTrashMembershipSetHash: expectedTrashMembershipSetHash,
             items: items
         )
         return PersistentOperationPreview(
@@ -325,6 +328,7 @@ enum ArchiveAffectedSetPreviewFactory {
             providerInventoryHash: snapshot.inventoryHash,
             affectedSetHash: affectedSetHash,
             trashMembershipMutation: trashMembershipMutation,
+            expectedTrashMembershipSetHash: expectedTrashMembershipSetHash,
             createdAt: createdAt,
             expiresAt: expiresAt,
             items: items

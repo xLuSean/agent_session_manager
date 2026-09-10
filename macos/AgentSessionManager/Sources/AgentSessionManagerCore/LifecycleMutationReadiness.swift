@@ -159,7 +159,7 @@ public struct LifecycleMutationReadiness: Identifiable, Codable, Hashable, Senda
     }
 }
 
-/// Typed, read-only gate for the first planned native mutation slice: exactly
+/// Typed, read-only gate for single-session Archive: exactly
 /// one active Codex root thread archived through official App Server APIs.
 /// This assessor never invokes a lifecycle method.
 public enum ArchiveMutationReadinessAssessor {
@@ -180,7 +180,7 @@ public enum ArchiveMutationReadinessAssessor {
             selectionCount == 1 ? .satisfied : .blocked,
             selectionCount == 1
                 ? "Exactly one frozen manager key is selected."
-                : "The first live Archive slice accepts exactly one session."
+                : "Single-session Archive requires exactly one session."
         ))
         items.append(item(
             .provider,
@@ -194,7 +194,7 @@ public enum ArchiveMutationReadinessAssessor {
             session?.nativeState == .active ? .satisfied : (session == nil ? .unavailable : .blocked),
             session?.nativeState == .active
                 ? "The official inventory reports the session as active."
-                : "Only a natively active session can enter the first Archive slice."
+                : "Archive requires a natively active session."
         ))
         items.append(item(
             .stableReconciliation,
@@ -287,7 +287,7 @@ public enum ArchiveMutationReadinessAssessor {
             descendantVerdict == .satisfied
                 ? "The complete graph shows no descendants."
                 : (descendantVerdict == .blocked
-                    ? "The first Archive slice excludes sessions with descendants because thread/archive can affect them too."
+                    ? "Archive excludes sessions with descendants because thread/archive can affect them too."
                     : "A complete descendant graph is required before Archive.")
         ))
         appendProtection(
@@ -305,7 +305,7 @@ public enum ArchiveMutationReadinessAssessor {
             executorAvailable ? .satisfied : .blocked,
             executorAvailable
                 ? "The manager Archive executor is enabled."
-                : "The manager Archive executor is not implemented or authorized yet; no native mutation will run."
+                : "The Archive executor is unavailable; no Archive request will be sent."
         ))
 
         return LifecycleMutationReadiness(

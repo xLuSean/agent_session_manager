@@ -3,6 +3,34 @@ import Foundation
 import XCTest
 
 final class PersistentStateRepositoryTests: XCTestCase {
+    func testSubmillisecondCheckpointRoundTripPreservesExactIdentity() throws {
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        let checkpoint = ProviderCheckpointRecord(
+            provider: .codex,
+            runtimeVersion: "0.153.4",
+            inventoryHash: "submillisecond-checkpoint",
+            refreshedAt: Date(timeIntervalSince1970: 1_788_794_868.123456),
+            inventoryComplete: true,
+            protectionComplete: false
+        )
+
+        try store.upsertProviderCheckpoint(checkpoint)
+        XCTAssertEqual(try store.providerCheckpoint(for: .codex), checkpoint)
+        // Re-saving the exact observation must remain idempotent, while a
+        // different inventory at the same persisted timestamp must still fail.
+        try store.upsertProviderCheckpoint(checkpoint)
+        let changed = ProviderCheckpointRecord(
+            provider: .codex,
+            runtimeVersion: checkpoint.runtimeVersion,
+            inventoryHash: "different-inventory",
+            refreshedAt: checkpoint.refreshedAt,
+            inventoryComplete: true,
+            protectionComplete: false
+        )
+        XCTAssertThrowsError(try store.upsertProviderCheckpoint(changed))
+    }
+
     func testCheckpointAndTrashMembershipRoundTripIsIdempotent() throws {
         let store = try makeStore(named: #function)
         defer { store.close() }

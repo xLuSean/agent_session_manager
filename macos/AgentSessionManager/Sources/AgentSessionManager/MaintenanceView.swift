@@ -133,16 +133,13 @@ struct MaintenanceView: View {
                 HStack {
                     Label(
                         compaction.recommendation == .eligibleForExplicitPreview
-                            ? "Eligible for a future explicit Preview"
+                            ? "Reclaimable space detected"
                             : "Below the compaction threshold",
                         systemImage: compaction.recommendation == .eligibleForExplicitPreview
-                            ? "exclamationmark.triangle"
+                            ? "info.circle"
                             : "minus.circle"
                     )
-                    .foregroundStyle(
-                        compaction.recommendation == .eligibleForExplicitPreview
-                            ? Color.orange : Color.secondary
-                    )
+                    .foregroundStyle(.secondary)
                     Spacer()
                     Text(compaction.reclaimableRatio, format: .percent.precision(.fractionLength(1)))
                         .font(.headline.monospacedDigit())
@@ -164,16 +161,9 @@ struct MaintenanceView: View {
                     "Production threshold",
                     "At least \(formatBytes(compaction.policy.minimumReclaimableBytes)) and \(formatPercent(compaction.policy.minimumReclaimableRatio))."
                 )
-                detailRow("Future strategy", "VACUUM INTO a separate verified replacement")
-                Label(
-                    "A future executor must close the store, create a pre-compaction backup, verify the replacement, require explicit confirmation, and read back the result.",
-                    systemImage: "lock.shield"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                Text("Execution authorized: No")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
+                Text("Estimate only. Database compaction is not available in this version; no database files are changed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         } label: {
             Label("Physical Compaction Estimate", systemImage: "square.resize.down")

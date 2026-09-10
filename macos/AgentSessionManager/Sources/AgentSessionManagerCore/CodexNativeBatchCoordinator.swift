@@ -16,16 +16,28 @@ public struct NativeBatchReport: Identifiable, Sendable {
 
 protocol CodexNativeBatchMutationTransport: Sendable {
     func inventorySnapshot() async throws -> ProviderInventorySnapshot
+    func lifecycleReadbackSnapshot() async throws -> ProviderInventorySnapshot
     func archive(_ nativeSessionID: String) async throws
+    func archive(_ nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws
     func restore(_ nativeSessionID: String) async throws
+    func restore(_ nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws
     func delete(_ nativeSessionID: String) async throws
+    func delete(_ nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws
     func exactDeleteRead(
         _ nativeSessionID: String,
         auditedRuntimeVersion: String
     ) async -> DeleteExactReadObservation
+    func exactDeleteRead(_ nativeSessionID: String, auditedRuntimeVersion: String,
+                  expectedCompatibility: CodexCompatibilityBinding?) async -> DeleteExactReadObservation
 }
 
-private actor CodexNativeBatchTransport: CodexNativeBatchMutationTransport {
+extension CodexNativeBatchMutationTransport {
+    func lifecycleReadbackSnapshot() async throws -> ProviderInventorySnapshot {
+        try await inventorySnapshot()
+    }
+}
+
+actor CodexNativeBatchTransport: CodexNativeBatchMutationTransport {
     private let source: any CodexArchiveSource & CodexRestoreSource & CodexDeleteSource
 
     init(source: any CodexArchiveSource & CodexRestoreSource & CodexDeleteSource) {
@@ -36,24 +48,45 @@ private actor CodexNativeBatchTransport: CodexNativeBatchMutationTransport {
         try CodexProviderInventorySnapshotBuilder.make(from: await source.inventory())
     }
 
+    func lifecycleReadbackSnapshot() async throws -> ProviderInventorySnapshot {
+        try CodexProviderInventorySnapshotBuilder.make(from: await source.lifecycleReadback())
+    }
+
     func archive(_ nativeSessionID: String) async throws {
-        try await source.archive(threadID: nativeSessionID)
+        try await archive(nativeSessionID, expectedCompatibility: nil)
+    }
+
+    func archive(_ nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws {
+        try await source.archive(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
     }
 
     func restore(_ nativeSessionID: String) async throws {
-        try await source.unarchive(threadID: nativeSessionID)
+        try await restore(nativeSessionID, expectedCompatibility: nil)
+    }
+
+    func restore(_ nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws {
+        try await source.unarchive(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
     }
 
     func delete(_ nativeSessionID: String) async throws {
-        try await source.delete(threadID: nativeSessionID)
+        try await delete(nativeSessionID, expectedCompatibility: nil)
+    }
+
+    func delete(_ nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws {
+        try await source.delete(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
     }
 
     func exactDeleteRead(
         _ nativeSessionID: String,
         auditedRuntimeVersion: String
     ) async -> DeleteExactReadObservation {
+        await exactDeleteRead(nativeSessionID, auditedRuntimeVersion: auditedRuntimeVersion, expectedCompatibility: nil)
+    }
+
+    func exactDeleteRead(_ nativeSessionID: String, auditedRuntimeVersion: String,
+                  expectedCompatibility: CodexCompatibilityBinding?) async -> DeleteExactReadObservation {
         do {
-            let snapshot = try await source.exactRead(threadID: nativeSessionID)
+            let snapshot = try await source.exactReadForDeletion(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
             guard snapshot.thread.id == nativeSessionID else {
                 return .unavailable(
                     observedAt: snapshot.observedAt,
@@ -66,17 +99,9 @@ private actor CodexNativeBatchTransport: CodexNativeBatchMutationTransport {
                 observedAt: snapshot.observedAt,
                 runtimeVersion: snapshot.runtimeVersion
             )
-        } catch let CodexAppServerError.rpcError(code, message)
-            where code == -32600
-                && message == "thread not loaded: \(nativeSessionID)"
-                && CodexAppServerProvider.supportsVerifiedDeleteContract(
-                    auditedRuntimeVersion
-                ) {
-            return .absent(
-                nativeSessionID: nativeSessionID,
-                observedAt: Date(),
-                runtimeVersion: auditedRuntimeVersion
-            )
+        } catch let evidence as CodexDeleteAbsenceEvidence {
+            return .verifiedAbsence(evidence, nativeSessionID: nativeSessionID,
+                                    auditedRuntimeVersion: auditedRuntimeVersion, expectedCompatibility: expectedCompatibility)
         } catch {
             return .unavailable(
                 observedAt: Date(),
@@ -94,6 +119,7 @@ private actor CodexNativeBatchTransport: CodexNativeBatchMutationTransport {
 public actor CodexNativeBatchCoordinator {
     private let store: SQLiteStateStore
     private let transport: any CodexNativeBatchMutationTransport
+    private let executionGate: any CodexLifecycleExecutionChecking
     private let now: @Sendable () -> Date
     private let makePreviewID: @Sendable () -> UUID
     private let makeReportID: @Sendable () -> UUID
@@ -106,6 +132,7 @@ public actor CodexNativeBatchCoordinator {
         self.transport = CodexNativeBatchTransport(
             source: CodexAppServerClient(configuration: configuration)
         )
+        self.executionGate = CodexDesktopLifecycleExecutionGate()
         self.now = { Date() }
         self.makePreviewID = { UUID() }
         self.makeReportID = { UUID() }
@@ -114,12 +141,14 @@ public actor CodexNativeBatchCoordinator {
     init(
         store: SQLiteStateStore,
         transport: any CodexNativeBatchMutationTransport,
+        executionGate: any CodexLifecycleExecutionChecking,
         now: @escaping @Sendable () -> Date,
         makePreviewID: @escaping @Sendable () -> UUID,
         makeReportID: @escaping @Sendable () -> UUID
     ) {
         self.store = store
         self.transport = transport
+        self.executionGate = executionGate
         self.now = now
         self.makePreviewID = makePreviewID
         self.makeReportID = makeReportID
@@ -152,13 +181,16 @@ public actor CodexNativeBatchCoordinator {
                 "This operation has no Codex native batch path."
             )
         }
-        guard let runtimeVersion = checkpoint.runtimeVersion,
-              operation == .emptyTrash
-                ? CodexAppServerProvider.supportsVerifiedDeleteContract(runtimeVersion)
-                : CodexAppServerProvider.supportsVerifiedLifecycleContract(runtimeVersion) else {
-            throw PersistentStateError.invalidRecord(
-                "The observed Codex runtime is outside the audited native batch allow-list."
+        guard let mutationKind = CodexLifecycleMutationKind(operation: operation) else {
+            throw SessionManagerError.unsupportedOperation(
+                "This operation has no Codex lifecycle compatibility contract."
             )
+        }
+        let runtimeVersion = checkpoint.runtimeVersion ?? ""
+        if let reason = mutationKind.compatibilityBlockedReason(
+            runtimeVersion: runtimeVersion, binding: checkpoint.compatibilityBinding
+        ) {
+            throw SessionManagerError.unsupportedOperation(reason)
         }
 
         let sessionsByKey = Dictionary(uniqueKeysWithValues: snapshot.sessions.map { ($0.id, $0) })
@@ -261,6 +293,7 @@ public actor CodexNativeBatchCoordinator {
             operation: persistentOperation,
             providerInventoryHash: checkpoint.inventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: checkpoint.compatibilityBinding,
             reconciliationTimestamp: checkpoint.refreshedAt,
             createdAt: createdAt,
             expiresAt: expiresAt,
@@ -336,6 +369,8 @@ public actor CodexNativeBatchCoordinator {
             )
         }
 
+        try await executionGate.requireCodexDesktopExited()
+
         let startedAt = now()
         let claimed = try store.claimOperationPreviewForExecution(
             id: preview.id,
@@ -396,16 +431,31 @@ public actor CodexNativeBatchCoordinator {
               let checkpoint = try store.providerCheckpoint(for: .codex) else {
             return nil
         }
+        guard checkpoint.inventoryComplete,
+              checkpoint.inventoryHash == preview.providerInventoryHash,
+              let runtimeVersion = checkpoint.runtimeVersion,
+              try ArchiveExecutionHasher.manifestHash(
+                provider: preview.provider, operation: preview.operation,
+                providerInventoryHash: checkpoint.inventoryHash, runtimeVersion: runtimeVersion,
+                compatibilityBinding: checkpoint.compatibilityBinding,
+                reconciliationTimestamp: checkpoint.refreshedAt, createdAt: preview.createdAt,
+                expiresAt: preview.expiresAt, trashMembershipMutation: preview.trashMembershipMutation,
+                items: preview.items) == preview.manifestHash else {
+            throw PersistentStateError.invalidRecord("The original batch claim checkpoint changed; recovery cannot verify an outcome.")
+        }
         let startedAt = now()
-        let sessionsByKey = Dictionary(uniqueKeysWithValues: snapshot.sessions.map { ($0.id, $0) })
+        let sessionsByKey = Dictionary(grouping: snapshot.sessions, by: \.id)
         var results: [PersistentReportItem] = []
         for item in preview.items {
             let result = await recoveryResult(
                 item: item,
                 operation: preview.operation,
                 snapshot: snapshot,
-                session: sessionsByKey[item.managerKey],
-                runtimeVersion: checkpoint.runtimeVersion ?? ""
+                session: sessionsByKey[item.managerKey]?.first,
+                runtimeVersion: runtimeVersion,
+                expectedCompatibility: checkpoint.compatibilityBinding,
+                notBefore: preview.createdAt,
+                identitiesUnique: sessionsByKey.values.allSatisfy { $0.count == 1 }
             )
             results.append(result)
         }
@@ -440,6 +490,7 @@ public actor CodexNativeBatchCoordinator {
         guard snapshot.provider == .codex,
               snapshot.inventoryComplete,
               snapshot.runtimeVersion == checkpoint.runtimeVersion,
+              snapshot.compatibilityBinding == checkpoint.compatibilityBinding,
               snapshot.observedAt >= checkpoint.refreshedAt else {
             throw PersistentStateError.invalidRecord(
                 "The complete Codex batch preflight is unavailable or predates the Preview."
@@ -512,11 +563,11 @@ public actor CodexNativeBatchCoordinator {
         do {
             switch operation {
             case .archive, .moveToTrash:
-                try await transport.archive(item.nativeSessionID)
+                try await transport.archive(item.nativeSessionID, expectedCompatibility: checkpoint.compatibilityBinding)
             case .restore:
-                try await transport.restore(item.nativeSessionID)
+                try await transport.restore(item.nativeSessionID, expectedCompatibility: checkpoint.compatibilityBinding)
             case .permanentlyDelete:
-                try await transport.delete(item.nativeSessionID)
+                try await transport.delete(item.nativeSessionID, expectedCompatibility: checkpoint.compatibilityBinding)
             case .moveToArchive:
                 throw PersistentStateError.invalidRecord(
                     "Manager-only operation entered native execution."
@@ -531,22 +582,26 @@ public actor CodexNativeBatchCoordinator {
             if operation == .permanentlyDelete {
                 async let exactRead = transport.exactDeleteRead(
                     item.nativeSessionID,
-                    auditedRuntimeVersion: checkpoint.runtimeVersion ?? ""
+                    auditedRuntimeVersion: checkpoint.runtimeVersion ?? "",
+                    expectedCompatibility: checkpoint.compatibilityBinding
                 )
-                let inventory = try await transport.inventorySnapshot()
+                let inventory = try await transport.lifecycleReadbackSnapshot()
                 return classifyDelete(
                     item,
                     inventory: inventory,
                     exactRead: await exactRead,
                     acknowledgementError: acknowledgementError,
-                    evidenceAt: evidenceAt
+                    evidenceAt: evidenceAt,
+                    runtimeVersion: checkpoint.runtimeVersion ?? "",
+                    expectedCompatibility: checkpoint.compatibilityBinding
                 )
             }
-            let inventory = try await transport.inventorySnapshot()
+            let inventory = try await transport.lifecycleReadbackSnapshot()
             let desiredState: NativeSessionState = operation == .restore ? .active : .archived
             guard inventory.provider == .codex,
                   inventory.inventoryComplete,
                   inventory.runtimeVersion == checkpoint.runtimeVersion,
+                  inventory.compatibilityBinding == checkpoint.compatibilityBinding,
                   inventory.observedAt >= evidenceAt else {
                 return unknown(
                     item.managerKey,
@@ -588,10 +643,14 @@ public actor CodexNativeBatchCoordinator {
         inventory: ProviderInventorySnapshot,
         exactRead: DeleteExactReadObservation,
         acknowledgementError: Error?,
-        evidenceAt: Date
+        evidenceAt: Date,
+        runtimeVersion: String,
+        expectedCompatibility: CodexCompatibilityBinding?
     ) -> PersistentReportItem {
         guard inventory.provider == .codex,
               inventory.inventoryComplete,
+              inventory.runtimeVersion == runtimeVersion,
+              inventory.compatibilityBinding == expectedCompatibility,
               inventory.observedAt >= evidenceAt else {
             return unknown(
                 item.managerKey,
@@ -609,8 +668,10 @@ public actor CodexNativeBatchCoordinator {
                     ?? "Exact-ID readback still found the session after Delete."
             )
         }
-        if case let .absent(nativeID, exactAt, _) = exactRead,
-           nativeID == item.nativeSessionID {
+        if case let .absent(nativeID, exactAt, exactRuntime) = exactRead,
+           nativeID == item.nativeSessionID,
+           exactAt >= evidenceAt,
+           exactRuntime == runtimeVersion {
             return success(
                 item.managerKey,
                 state: .absent,
@@ -629,13 +690,21 @@ public actor CodexNativeBatchCoordinator {
         operation: PersistentOperation,
         snapshot: ProviderInventorySnapshot,
         session: AgentSession?,
-        runtimeVersion: String
+        runtimeVersion: String,
+        expectedCompatibility: CodexCompatibilityBinding?,
+        notBefore: Date,
+        identitiesUnique: Bool
     ) async -> PersistentReportItem {
-        guard snapshot.inventoryComplete else {
+        guard snapshot.provider == .codex,
+              snapshot.inventoryComplete,
+              snapshot.runtimeVersion == runtimeVersion,
+              snapshot.compatibilityBinding == expectedCompatibility,
+              snapshot.observedAt >= notBefore,
+              identitiesUnique else {
             return unknown(
                 item.managerKey,
-                code: "batch_recovery_inventory_incomplete",
-                message: "Recovery requires a complete inventory and never resends the mutation."
+                code: "batch_recovery_evidence_unavailable",
+                message: "Recovery requires fresh complete evidence from the original runtime and never resends the mutation."
             )
         }
         switch operation {
@@ -653,10 +722,13 @@ public actor CodexNativeBatchCoordinator {
             if session == nil {
                 let exact = await transport.exactDeleteRead(
                     item.nativeSessionID,
-                    auditedRuntimeVersion: runtimeVersion
+                    auditedRuntimeVersion: runtimeVersion,
+                    expectedCompatibility: expectedCompatibility
                 )
-                if case let .absent(nativeID, exactAt, _) = exact,
-                   nativeID == item.nativeSessionID {
+                if case let .absent(nativeID, exactAt, exactRuntime) = exact,
+                   nativeID == item.nativeSessionID,
+                   exactAt >= notBefore,
+                   exactRuntime == runtimeVersion {
                     return success(
                         item.managerKey,
                         state: .absent,

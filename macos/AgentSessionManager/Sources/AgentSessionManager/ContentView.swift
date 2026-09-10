@@ -3,9 +3,33 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: SessionManagerModel
+    @Environment(\.openSettings) private var openSettings
+    @State private var hasLoaded = false
 
     var body: some View {
         mainSplitView
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let notice = model.compatibilityNotice {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label(notice.title, systemImage: "info.circle")
+                            .fontWeight(.medium)
+                        Spacer()
+                        Button("Review Compatibility") { reviewCompatibility() }
+                            .accessibilityIdentifier("reviewCodexCompatibility")
+                        if model.isCompatibilityNoticeExpanded {
+                            Button("Later") { model.deferCompatibilityNotice() }
+                        }
+                    }
+                    if model.isCompatibilityNoticeExpanded {
+                        Text(notice.message).font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(0.08))
+            }
+        }
         .background {
             Color.clear
                 .frame(width: 0, height: 0)
@@ -40,15 +64,24 @@ struct ContentView: View {
                 }
             }
         }
-        .task { await model.reload() }
+        .task {
+            model.refreshCompatibilityReport()
+            await model.reload()
+            hasLoaded = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if hasLoaded { model.refreshCompatibilityReport() }
+        }
+        .alert("Codex changed — check compatibility", isPresented: $model.isCompatibilityUpdateAlertPresented) {
+            Button("Review Compatibility") { reviewCompatibility() }
+            Button("Later", role: .cancel) { model.deferCompatibilityNotice() }
+        } message: {
+            Text("This Codex installation differs from your saved check. Review compatibility before using unverified operations. Your conversations have not been changed.")
+        }
         .sheet(item: $model.pendingPreview, onDismiss: {
             model.presentQueuedOperationReport()
         }) { preview in
             OperationPreviewSheet(preview: preview)
-                .environmentObject(model)
-        }
-        .sheet(item: $model.pendingArchiveReadiness) { readiness in
-            ArchiveReadinessSheet(readiness: readiness)
                 .environmentObject(model)
         }
         .sheet(item: $model.pendingNativeArchivePreview) { preview in
@@ -69,15 +102,18 @@ struct ContentView: View {
             NativeDeletePreviewSheet(preview: preview)
                 .environmentObject(model)
         }
-        .sheet(item: $model.latestNativeDeleteReport) { report in
+        .sheet(item: $model.latestNativeDeleteReport, onDismiss: {
+            model.presentQueuedNativeDeleteDesktopCleanup()
+        }) { report in
             NativeDeleteReportSheet(report: report)
+                .environmentObject(model)
         }
         .sheet(item: $model.latestReport) { report in
             OperationReportSheet(report: report)
                 .environmentObject(model)
         }
         .sheet(item: $model.pendingConflictResolutionPreview, onDismiss: {
-            model.presentQueuedOperationReport()
+            model.presentQueuedConflictFollowUp()
         }) { preview in
             ConflictResolutionPreviewSheet(preview: preview)
                 .environmentObject(model)
@@ -88,6 +124,15 @@ struct ContentView: View {
         }
         .sheet(isPresented: $model.isMaintenancePresented) {
             MaintenanceView()
+                .environmentObject(model)
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { model.isGhostRepairBulkInventoryPresented },
+                set: { _ = model.setGhostRepairBulkInventoryPresented($0) }
+            )
+        ) {
+            GhostRepairBulkInventorySheet()
                 .environmentObject(model)
         }
         .alert(
@@ -101,6 +146,13 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "Unknown error")
         }
+    }
+
+    private func reviewCompatibility() {
+        model.settingsTab = "compatibility"
+        // Use the real Settings scene; do not present a competing sheet while
+        // the startup alert is dismissing.
+        DispatchQueue.main.async { openSettings() }
     }
 
     @ViewBuilder

@@ -82,11 +82,13 @@ public actor SessionSnapshotCoordinator {
         } else {
             ArchiveScopeSnapshot(nodes: [], isComplete: false)
         }
+        let compatibilityBinding = await (provider as? CodexAppServerProvider)?.compatibilityBinding()
         let inventoryHash = try InventorySnapshotHasher.hash(
             provider: provider.system,
             sessions: sessions,
             archiveScopeNodes: archiveScope.nodes,
-            archiveScopeComplete: archiveScope.isComplete
+            archiveScopeComplete: archiveScope.isComplete,
+            compatibilityBinding: compatibilityBinding
         )
         let inventoryComplete = diagnostics.inventoryComplete
             && diagnostics.connectionState != .unavailable
@@ -94,6 +96,7 @@ public actor SessionSnapshotCoordinator {
         let checkpoint = ProviderCheckpointRecord(
             provider: provider.system,
             runtimeVersion: diagnostics.runtimeVersion,
+            compatibilityBinding: compatibilityBinding,
             inventoryHash: inventoryHash,
             refreshedAt: observedAt,
             inventoryComplete: inventoryComplete,
@@ -110,6 +113,7 @@ public actor SessionSnapshotCoordinator {
         let snapshot = ProviderInventorySnapshot(
             provider: provider.system,
             runtimeVersion: diagnostics.runtimeVersion,
+            compatibilityBinding: compatibilityBinding,
             inventoryHash: inventoryHash,
             observedAt: observedAt,
             inventoryComplete: inventoryComplete,
@@ -211,7 +215,8 @@ public enum InventorySnapshotHasher {
         provider: AgentSystem,
         sessions: [AgentSession],
         archiveScopeNodes: [ArchiveScopeNode] = [],
-        archiveScopeComplete: Bool = false
+        archiveScopeComplete: Bool = false,
+        compatibilityBinding: CodexCompatibilityBinding? = nil
     ) throws -> String {
         var normalized: [AgentSession] = []
         normalized.reserveCapacity(sessions.count)
@@ -239,7 +244,8 @@ public enum InventorySnapshotHasher {
             provider: provider,
             sessions: normalized,
             archiveScopeNodes: normalizedScope,
-            archiveScopeComplete: archiveScopeComplete
+            archiveScopeComplete: archiveScopeComplete,
+            compatibilityBinding: compatibilityBinding
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -254,4 +260,5 @@ private struct InventoryHashPayload: Encodable {
     let sessions: [AgentSession]
     let archiveScopeNodes: [ArchiveScopeNode]
     let archiveScopeComplete: Bool
+    let compatibilityBinding: CodexCompatibilityBinding?
 }

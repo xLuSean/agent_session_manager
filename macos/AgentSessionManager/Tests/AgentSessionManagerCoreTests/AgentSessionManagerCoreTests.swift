@@ -361,7 +361,11 @@ final class AgentSessionManagerCoreTests: XCTestCase {
             )
         ))
 
+        let initialFilesHome = await provider.sessionFilesHomeURL()
+        XCTAssertNil(initialFilesHome)
         _ = try await provider.sessions()
+        let reportedFilesHome = await provider.sessionFilesHomeURL()
+        XCTAssertEqual(reportedFilesHome?.path, "/Users/example/.codex")
         let diagnostics = await provider.diagnostics()
         XCTAssertEqual(diagnostics.connectionState, .degraded)
         XCTAssertFalse(diagnostics.capabilities.canReadPinnedState)
@@ -432,6 +436,34 @@ final class AgentSessionManagerCoreTests: XCTestCase {
         XCTAssertTrue(pagination.isTruncated)
     }
 
+    func testLifecycleReadbackCollectsBothCollectionsWithoutPreflightMetadata() async throws {
+        let executable = try XCTUnwrap(Bundle.module.url(forResource: "fake-app-server-readback", withExtension: "sh"))
+        let client = CodexAppServerClient(configuration: .init(executableURL: executable, timeout: 2))
+        let snapshot = try await client.lifecycleReadback()
+        XCTAssertEqual(snapshot.active.map(\.id), ["fixture-session"])
+        XCTAssertTrue(snapshot.archived.isEmpty)
+        XCTAssertFalse(snapshot.isTruncated)
+        XCTAssertEqual(snapshot.runtimeVersion, "0.149.0")
+        XCTAssertFalse(snapshot.descendantGraphComplete)
+        XCTAssertFalse(snapshot.desktopPinStateAvailable)
+        XCTAssertFalse(snapshot.projectCatalogAvailable)
+        XCTAssertFalse(snapshot.trustConfigurationAvailable)
+        let mapped = try CodexProviderInventorySnapshotBuilder.make(from: snapshot)
+        XCTAssertTrue(mapped.inventoryComplete)
+        XCTAssertFalse(mapped.protectionComplete)
+        XCTAssertFalse(mapped.archiveScopeComplete)
+    }
+
+    func testLifecycleReadbackPreservesPaginationSafetyBound() async throws {
+        let executable = try XCTUnwrap(Bundle.module.url(forResource: "fake-app-server-readback", withExtension: "sh"))
+        let client = CodexAppServerClient(configuration: .init(
+            executableURL: executable, maximumPagesPerCollection: 1, timeout: 2
+        ))
+        let snapshot = try await client.lifecycleReadback()
+        XCTAssertTrue(snapshot.isTruncated)
+        XCTAssertFalse(try CodexProviderInventorySnapshotBuilder.make(from: snapshot).inventoryComplete)
+    }
+
     func testCodexConfigurationClampsPaginationToRuntimeSafetyBounds() {
         let configuration = CodexAppServerConfiguration(
             pageSize: 500,
@@ -442,6 +474,39 @@ final class AgentSessionManagerCoreTests: XCTestCase {
         XCTAssertEqual(configuration.pageSize, 50)
         XCTAssertEqual(configuration.maximumPagesPerCollection, 200)
     }
+
+#if ASM_ISOLATED_DELETE_ACCEPTANCE
+    func testIsolatedDeleteConfigurationRejectsInitializeCodexHomeMismatch() async throws {
+        let executable = try XCTUnwrap(
+            Bundle.module.url(forResource: "fake-app-server-archive", withExtension: "sh")
+        )
+        let attributes = try FileManager.default.attributesOfItem(atPath: executable.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        guard permissions & 0o100 != 0 else {
+            throw XCTSkip("App Server fixture executable bit is unavailable.")
+        }
+        let expectedHome = URL(fileURLWithPath: "/tmp/asm-isolated-delete-home-mismatch")
+        let source = CodexAppServerClient(
+            configuration: .isolatedDeleteAcceptance(
+                executableURL: executable,
+                codexHomeURL: expectedHome,
+                timeout: 2
+            )
+        )
+
+        do {
+            _ = try await source.inventory()
+            XCTFail("A mismatched initialize.codexHome must stop before inventory reads.")
+        } catch {
+            XCTAssertEqual(
+                error as? CodexAppServerError,
+                .launchFailed(
+                    "Isolated Delete acceptance rejected App Server codexHome mismatch."
+                )
+            )
+        }
+    }
+#endif
 
     func testCodexMappingKeepsUnavailableProtectionUnknown() throws {
         let record = makeCodexRecord(

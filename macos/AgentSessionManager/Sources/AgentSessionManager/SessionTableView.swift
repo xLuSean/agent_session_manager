@@ -4,11 +4,30 @@ import SwiftUI
 
 struct SessionTableView: View {
     @EnvironmentObject private var model: SessionManagerModel
+    @State private var historyClearPreview: CompletedHistoryClearPreview?
+    @State private var deletedListClearPreview: DeletedListClearPreview?
+    @State private var historyClearError: String?
 
     var body: some View {
         VStack(spacing: 0) {
             liveBanner
-            trashSelectionBar
+            deletedHistoryBar
+            filteredSelectionBar
+            HStack {
+                if model.isCalculatingSessionFileSizes {
+                    ProgressView().controlSize(.small)
+                    Text("Updating conversation sizes…").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("Sort", selection: $model.sessionListSort) {
+                    ForEach(SessionListSort.allCases, id: \.self) { order in
+                        Text(order.rawValue).tag(order)
+                    }
+                }
+                .fixedSize()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
             Table(model.filteredSessions, selection: $model.focusedSessionID) {
                 TableColumn("Session") { session in
                     SessionIdentityCell(model: model, session: session)
@@ -41,6 +60,14 @@ struct SessionTableView: View {
                 }
                 .width(min: 100, ideal: 110)
 
+                TableColumn("Conversation Size") { session in
+                    Text(model.conversationFileSizeLabel(for: session))
+                        .monospacedDigit()
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .help(model.conversationFileSizeHelp)
+                }
+                .width(min: 125, ideal: 135)
+
                 TableColumn("Updated") { session in
                     Text(session.updatedAt, format: .relative(presentation: .named))
                         .foregroundStyle(.secondary)
@@ -50,8 +77,8 @@ struct SessionTableView: View {
             }
             .background {
                 TableColumnWidthPersistence(
-                    storageKey: "layout.sessionTable.columnWidths.v1",
-                    expectedColumnCount: 5
+                    storageKey: "layout.sessionTable.columnWidths.v2",
+                    expectedColumnCount: 6
                 )
             }
             .contextMenu(forSelectionType: String.self) { managerKeys in
@@ -60,39 +87,114 @@ struct SessionTableView: View {
             selectionSummary
         }
         .navigationTitle(model.navigationTitle)
-        .searchable(text: $model.searchText, prompt: "Title, ID, project, or folder")
+        .searchable(text: $model.searchText, prompt: "Title, ID, source, project, or folder")
         .toolbar { toolbarContent }
+        .alert("Remove Deleted list records?", isPresented: Binding(
+            get: { deletedListClearPreview != nil }, set: { if !$0 { deletedListClearPreview = nil } }
+        ), presenting: deletedListClearPreview) { preview in
+            Button("Remove from List", role: .destructive) {
+                do { try model.clearDeletedList(preview) }
+                catch { historyClearError = error.localizedDescription }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { preview in
+            Text("Remove \(preview.recordCount) records from the ASM Deleted list, including older records without completion reports. No Codex conversations or backup files will be changed. Operation reports and recovery evidence remain stored separately; this is not erasure of all ASM data. Removed records stay out of this list after refresh or restart.")
+        }
+        .alert("Clear completed history?", isPresented: Binding(
+            get: { historyClearPreview != nil }, set: { if !$0 { historyClearPreview = nil } }
+        ), presenting: historyClearPreview) { preview in
+            Button("Clear Records", role: .destructive) {
+                do { try model.clearCompletedHistory(preview) }
+                catch { historyClearError = error.localizedDescription }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { preview in
+            Text("This removes \(preview.deletedRecordCount) Deleted records, \(preview.reportCount) reports and \(preview.ghostOperationCount) completed cleanup operations from ASM only. \(preview.keptRecordCount) Deleted records are kept because completion cannot be verified or the full batch is not selected. No Codex conversations or backup files are changed. Minimal replay-prevention markers are retained. This cannot be undone from this list.")
+        }
+        .alert("History was kept", isPresented: Binding(
+            get: { historyClearError != nil }, set: { if !$0 { historyClearError = nil } }
+        )) { Button("OK", role: .cancel) {} } message: { Text(historyClearError ?? "") }
         .overlay {
             if model.filteredSessions.isEmpty && !model.isLoading {
-                ContentUnavailableView(
-                    "No Sessions",
-                    systemImage: "tray",
-                    description: Text("Adjust the filters or search text.")
-                )
+                ContentUnavailableView {
+                    Label(model.hasSessionSearch ? "No Matching Records" : "No Sessions",
+                          systemImage: model.hasSessionSearch ? "magnifyingglass" : "tray")
+                } description: {
+                    Text(model.hasSessionSearch
+                         ? "No records match your search in this view. Clear the search or adjust the filters."
+                         : "No records are shown with the current filters.")
+                } actions: {
+                    if model.hasSessionSearch {
+                        Button("Clear Search") { model.clearSessionSearch() }
+                    }
+                }
             }
         }
     }
 
     @ViewBuilder
-    private var trashSelectionBar: some View {
-        if model.selectedFilter == .trash {
+    private var deletedHistoryBar: some View {
+        if model.selectedFilter == .deleted {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("List removal does not change Codex data. Completed operation history is cleaned after 30 days; recovery evidence is kept.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear Selected Records…") { prepareDeletedListClear(selectedOnly: true) }
+                        .disabled(model.selection.isEmpty || model.isLoading)
+                    Button("Clear All List Records") { prepareDeletedListClear(selectedOnly: false) }
+                        .disabled(model.isLoading)
+                }
+                Button("Clear Completed Operation History…") { prepareHistoryClear(selectedOnly: false) }
+                    .disabled(model.isLoading)
+                if let notice = model.completedHistoryNotice {
+                    Text(notice).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func prepareDeletedListClear(selectedOnly: Bool) {
+        do {
+            let preview = try model.prepareDeletedListClear(selectedOnly: selectedOnly)
+            if preview.isEmpty {
+                historyClearError = "No Deleted list records match. Refresh the list or select records again."
+            } else { deletedListClearPreview = preview }
+        } catch { historyClearError = error.localizedDescription }
+    }
+
+    private func prepareHistoryClear(selectedOnly: Bool) {
+        do {
+            let preview = try model.prepareCompletedHistoryClear(selectedOnly: selectedOnly)
+            if preview.isEmpty {
+                historyClearError = "No safely completed records can be cleared. Pending, unknown, legacy/unverified records and partially selected batches are kept."
+            } else { historyClearPreview = preview }
+        } catch { historyClearError = error.localizedDescription }
+    }
+
+    @ViewBuilder
+    private var filteredSelectionBar: some View {
+        if model.showsFilteredSelectionControls {
             HStack(spacing: 10) {
                 TriStateCheckbox(
                     state: model.filteredSelectionState,
-                    label: "Select all filtered",
-                    isEnabled: !model.filteredSessions.isEmpty
+                    label: model.hasSessionSearch ? "Select all search results" : "Select all filtered",
+                    isEnabled: model.canToggleFilteredSelection
                 ) {
-                    model.toggleFilteredTrashSelection()
+                    model.toggleFilteredSelection()
                 }
                 .fixedSize(horizontal: true, vertical: true)
+                .help("Select or deselect only the currently shown results. Selections outside this view are kept.")
                 Text("\(model.filteredSessions.count) shown")
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(model.visibleSelectionCount) selected")
+                Text("\(model.selection.count) selected · \(model.visibleSelectionCount) shown")
                     .fontWeight(.medium)
-                if model.visibleSelectionCount > 0 {
+                if !model.selection.isEmpty {
+                    selectedOnlyToggle
                     Button("Clear Selection") {
-                        model.selection.removeAll()
+                        model.clearSelection()
                     }
                     .buttonStyle(.link)
                 }
@@ -107,15 +209,16 @@ struct SessionTableView: View {
 
     @ViewBuilder
     private var selectionSummary: some View {
-        if model.visibleSelectionCount > 0, model.selectedFilter != .trash {
+        if !model.selection.isEmpty, !model.showsFilteredSelectionControls {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.square.fill")
                     .foregroundStyle(Color.accentColor)
-                Text("\(model.visibleSelectionCount) selected")
+                Text("\(model.selection.count) selected · \(model.visibleSelectionCount) shown")
                     .fontWeight(.medium)
                 Spacer()
+                selectedOnlyToggle
                 Button("Clear Selection") {
-                    model.selection.removeAll()
+                    model.clearSelection()
                 }
                 .buttonStyle(.link)
             }
@@ -124,6 +227,13 @@ struct SessionTableView: View {
             .padding(.vertical, 6)
             .background(.bar)
         }
+    }
+
+    private var selectedOnlyToggle: some View {
+        Toggle("Show Selected Only", isOn: $model.isShowingSelectedSessionsOnly)
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help("Filter the table to sessions that are currently checked")
     }
 
     private var liveBanner: some View {
@@ -143,24 +253,7 @@ struct SessionTableView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
-            HoverHelpButton(
-                label: "Archive",
-                symbol: "archivebox",
-                disabled: model.selection.count > 1
-                    ? model.blockedReason(for: .archive) != nil
-                    : !model.canReviewArchiveReadiness,
-                helpText: model.selection.count > 1
-                    ? (model.blockedReason(for: .archive)
-                        ?? "Preview the exact native Archive batch")
-                    : (model.archiveReadinessReviewBlockedReason
-                        ?? "Review live Archive readiness")
-            ) {
-                if model.selection.count > 1 {
-                    Task { await model.requestPreview(.archive) }
-                } else {
-                    model.reviewArchiveReadiness()
-                }
-            }
+            operationToolbarButton(.archive)
 
             operationToolbarButton(.moveToTrash)
             operationToolbarButton(.restore)
@@ -217,21 +310,7 @@ struct SessionTableView: View {
         if managerKeys.isEmpty {
             Text("No session selected")
         } else {
-            Button {
-                model.selection = managerKeys
-                if managerKeys.count > 1 {
-                    Task { await model.requestPreview(.archive) }
-                } else {
-                    model.reviewArchiveReadiness(managerKeys: managerKeys)
-                }
-            } label: {
-                Label("Review Archive Readiness", systemImage: "archivebox")
-            }
-            .disabled(
-                managerKeys.count > 1
-                    ? model.blockedReason(for: .archive, managerKeys: managerKeys) != nil
-                    : model.archiveReadinessReviewBlockedReason(for: managerKeys) != nil
-            )
+            contextOperationButton(.archive, managerKeys: managerKeys)
 
             contextOperationButton(.moveToTrash, managerKeys: managerKeys)
             contextOperationButton(.restore, managerKeys: managerKeys)
@@ -288,6 +367,12 @@ private struct SessionIdentityCell: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .lineLimit(1)
+                if let source = session.liveSession?.supplementalSourceLabel {
+                    Text(source)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .help("Officially readable by ID, but omitted from the official list because its preview is empty.")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -797,7 +882,25 @@ private struct HoverHelpButton: View {
             }
             .disabled(disabled)
         }
-        .immediateHelp("\(label) — \(helpText)")
+        .modifier(
+            ToolbarHoverHelpModifier(
+                text: "\(label) — \(helpText)"
+            )
+        )
+    }
+}
+
+/// Native hover help is reserved for compact toolbar controls whose visible
+/// symbol does not explain the action. Large labelled controls use an
+/// accessibility hint only, avoiding persistent AppKit help tags that can
+/// overlap sheets and Settings content.
+private struct ToolbarHoverHelpModifier: ViewModifier {
+    let text: String
+
+    func body(content: Content) -> some View {
+        content
+            .help(text)
+            .accessibilityHint(text)
     }
 }
 
@@ -806,189 +909,7 @@ private struct ImmediateHelpModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .contentShape(Rectangle())
-            .background(ImmediateHelpTrackingView(text: text))
             .accessibilityHint(text)
-    }
-}
-
-/// Uses a borderless, non-activating AppKit panel so immediate help can escape
-/// narrow toolbar layout constraints without ever intercepting a click.
-private struct ImmediateHelpTrackingView: NSViewRepresentable {
-    let text: String
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: text)
-    }
-
-    func makeNSView(context: Context) -> HelpTrackingNSView {
-        let view = HelpTrackingNSView()
-        view.onMouseEntered = { [weak coordinator = context.coordinator] anchor in
-            coordinator?.show(relativeTo: anchor)
-        }
-        view.onMouseExited = { [weak coordinator = context.coordinator] in
-            coordinator?.hide()
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: HelpTrackingNSView, context: Context) {
-        context.coordinator.update(text: text, anchor: nsView)
-    }
-
-    static func dismantleNSView(
-        _ nsView: HelpTrackingNSView,
-        coordinator: Coordinator
-    ) {
-        coordinator.hide()
-    }
-
-    final class Coordinator {
-        private var text: String
-        private weak var anchor: NSView?
-        private var panel: NSPanel?
-
-        init(text: String) {
-            self.text = text
-        }
-
-        func update(text: String, anchor: NSView) {
-            guard self.text != text else { return }
-            self.text = text
-            if panel != nil {
-                show(relativeTo: anchor)
-            }
-        }
-
-        func show(relativeTo anchor: NSView) {
-            hide()
-            guard !text.isEmpty,
-                  let window = anchor.window else { return }
-            self.anchor = anchor
-
-            let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineBreakMode = .byWordWrapping
-            let attributed = NSAttributedString(
-                string: text,
-                attributes: [
-                    .font: font,
-                    .foregroundColor: NSColor.labelColor,
-                    .paragraphStyle: paragraph,
-                ]
-            )
-            let textBounds = attributed.boundingRect(
-                with: NSSize(
-                    width: 340,
-                    height: CGFloat.greatestFiniteMagnitude
-                ),
-                options: [.usesLineFragmentOrigin, .usesFontLeading]
-            )
-            let textSize = NSSize(
-                width: min(340, max(80, ceil(textBounds.width))),
-                height: max(ceil(font.pointSize + 4), ceil(textBounds.height))
-            )
-            let panelSize = NSSize(
-                width: textSize.width + 20,
-                height: textSize.height + 14
-            )
-
-            let helpPanel = NSPanel(
-                contentRect: NSRect(origin: .zero, size: panelSize),
-                styleMask: [.borderless, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false
-            )
-            helpPanel.isOpaque = false
-            helpPanel.backgroundColor = NSColor.clear
-            helpPanel.hasShadow = true
-            helpPanel.ignoresMouseEvents = true
-            helpPanel.hidesOnDeactivate = true
-            helpPanel.level = NSWindow.Level.popUpMenu
-            helpPanel.collectionBehavior = NSWindow.CollectionBehavior([
-                .transient,
-                .ignoresCycle,
-            ])
-            helpPanel.appearance = window.effectiveAppearance
-
-            let background = NSVisualEffectView(
-                frame: NSRect(origin: .zero, size: panelSize)
-            )
-            background.material = NSVisualEffectView.Material.popover
-            background.blendingMode = NSVisualEffectView.BlendingMode.withinWindow
-            background.state = NSVisualEffectView.State.active
-            background.wantsLayer = true
-            background.layer?.cornerRadius = 7
-            background.layer?.borderWidth = 0.5
-            background.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.65).cgColor
-
-            let label = NSTextField(labelWithAttributedString: attributed)
-            label.frame = NSRect(
-                x: 10,
-                y: 7,
-                width: textSize.width,
-                height: textSize.height
-            )
-            label.maximumNumberOfLines = 0
-            label.lineBreakMode = .byWordWrapping
-            background.addSubview(label)
-            helpPanel.contentView = background
-
-            let anchorInWindow = anchor.convert(anchor.bounds, to: nil)
-            let anchorOnScreen = window.convertToScreen(anchorInWindow)
-            let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame
-                ?? anchorOnScreen.insetBy(dx: -panelSize.width, dy: -panelSize.height)
-            let horizontalMargin: CGFloat = 8
-            var origin = NSPoint(
-                x: anchorOnScreen.midX - panelSize.width / 2,
-                y: anchorOnScreen.minY - panelSize.height - 8
-            )
-            origin.x = min(
-                max(origin.x, visibleFrame.minX + horizontalMargin),
-                visibleFrame.maxX - panelSize.width - horizontalMargin
-            )
-            if origin.y < visibleFrame.minY + 8 {
-                origin.y = anchorOnScreen.maxY + 8
-            }
-            helpPanel.setFrameOrigin(origin)
-            helpPanel.orderFrontRegardless()
-            panel = helpPanel
-        }
-
-        func hide() {
-            panel?.orderOut(nil)
-            panel = nil
-            anchor = nil
-        }
-    }
-}
-
-private final class HelpTrackingNSView: NSView {
-    var onMouseEntered: ((NSView) -> Void)?
-    var onMouseExited: (() -> Void)?
-    private var trackingAreaReference: NSTrackingArea?
-
-    override func updateTrackingAreas() {
-        if let trackingAreaReference {
-            removeTrackingArea(trackingAreaReference)
-        }
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingAreaReference = area
-        super.updateTrackingAreas()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        onMouseEntered?(self)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        onMouseExited?()
     }
 }
 

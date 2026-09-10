@@ -22,6 +22,7 @@ public enum DiagnosticLogCategory: String, Codable, CaseIterable, Identifiable, 
     case lifecycle
     case storage
     case recovery
+    case compatibility
 
     public var id: String { rawValue }
 
@@ -32,6 +33,7 @@ public enum DiagnosticLogCategory: String, Codable, CaseIterable, Identifiable, 
         case .lifecycle: "Lifecycle"
         case .storage: "Storage"
         case .recovery: "Recovery"
+        case .compatibility: "Compatibility"
         }
     }
 }
@@ -361,9 +363,11 @@ public actor DiagnosticLogStore {
         return makeSnapshot()
     }
 
-    public func exportJSONL() throws -> Data {
+    public func exportJSONL(compatibilityRunID: UUID? = nil) throws -> Data {
         _ = try snapshot()
         return storedEvents.reduce(into: Data()) { data, stored in
+            if let compatibilityRunID,
+               (stored.event.category != .compatibility || stored.event.metadata["check_id"] != compatibilityRunID.uuidString) { return }
             data.append(stored.encodedLine)
         }
     }

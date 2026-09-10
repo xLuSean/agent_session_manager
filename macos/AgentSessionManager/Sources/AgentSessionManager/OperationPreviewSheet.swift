@@ -194,11 +194,7 @@ struct OperationReportSheet: View {
             }
             .frame(minHeight: 240)
 
-            Text(
-                report.operation == .restore
-                    ? "Manager Trash membership and itemized report committed atomically. Codex was already Active; no lifecycle request was sent."
-                    : "Manager SQLite classification and itemized report committed atomically. Codex remained natively Archived."
-            )
+            Text(reportSummary)
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -210,6 +206,19 @@ struct OperationReportSheet: View {
         }
         .padding(24)
         .frame(minWidth: 760, minHeight: 440)
+    }
+
+    private var reportSummary: String {
+        switch report.operation {
+        case .restore:
+            "Manager Trash membership and itemized report committed atomically. Codex was already Active; no lifecycle request was sent."
+        case .emptyTrash where report.items.allSatisfy({
+            $0.note.contains("external deletion")
+        }):
+            "The stale Manager Trash membership, Deleted record, and itemized report committed atomically. Codex was already absent; no lifecycle request was sent."
+        default:
+            "Manager SQLite classification and itemized report committed atomically. Codex remained natively Archived."
+        }
     }
 
     private func metric(_ label: String, _ value: Int) -> some View {

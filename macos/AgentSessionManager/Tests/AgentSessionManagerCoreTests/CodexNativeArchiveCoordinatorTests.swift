@@ -8,6 +8,29 @@ final class CodexNativeArchiveCoordinatorTests: XCTestCase {
     private let previewID = UUID(uuidString: "a11f0000-0000-4000-8000-000000000001")!
     private let reportID = UUID(uuidString: "a11f0000-0000-4000-8000-000000000002")!
 
+    func testSubmillisecondInventoryCanPrepareArchiveWithoutFalseCheckpointDrift() async throws {
+        let fixture = try makeFixture(observationTime: observedAt.addingTimeInterval(0.123456))
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try store.upsertProviderCheckpoint(fixture.checkpoint)
+        let transport = NativeArchiveTransportStub(
+            preflight: fixture.snapshot,
+            readback: try readbackSnapshot(state: .archived)
+        )
+        let coordinator = makeCoordinator(store: store, transport: transport)
+
+        let preview = try await coordinator.prepare(
+            managerKey: fixture.session.id,
+            snapshot: fixture.snapshot,
+            checkpoint: fixture.checkpoint
+        )
+
+        XCTAssertEqual(try store.providerCheckpoint(for: .codex), fixture.checkpoint)
+        XCTAssertEqual(try store.operationPreview(id: preview.id)?.status, .prepared)
+        let counts = await transport.callCounts()
+        XCTAssertEqual(counts.archive, 0)
+    }
+
     func testFacadePersistsPreviewThenExecutesOneShotArchiveAndMapsReport() async throws {
         let fixture = try makeFixture()
         let store = try makeStore(named: #function)
@@ -55,6 +78,50 @@ final class CodexNativeArchiveCoordinatorTests: XCTestCase {
         XCTAssertEqual(counts.inventory, 2)
         XCTAssertEqual(counts.archive, 1)
         XCTAssertEqual(counts.archiveIDs, [nativeID])
+    }
+
+    func testRunningCodexBlocksBeforeClaimOrArchiveRequest() async throws {
+        let fixture = try makeFixture()
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try store.upsertProviderCheckpoint(fixture.checkpoint)
+        let transport = NativeArchiveTransportStub(
+            preflight: fixture.snapshot,
+            readback: try readbackSnapshot(state: .archived)
+        )
+        let gate = LifecycleExecutionGateStub(
+            error: .codexDesktopRunning(processKinds: [.codexApplication])
+        )
+        let coordinator = makeCoordinator(
+            store: store,
+            transport: transport,
+            executionGate: gate
+        )
+        let preview = try await coordinator.prepare(
+            managerKey: fixture.session.id,
+            snapshot: fixture.snapshot,
+            checkpoint: fixture.checkpoint
+        )
+
+        do {
+            _ = try await coordinator.execute(
+                preview: preview,
+                confirmationToken: preview.confirmationToken
+            )
+            XCTFail("Running Codex must block before Archive Preview claim.")
+        } catch let error as CodexLifecycleExecutionGateError {
+            XCTAssertEqual(
+                error,
+                .codexDesktopRunning(processKinds: [.codexApplication])
+            )
+        }
+
+        XCTAssertEqual(try store.operationPreview(id: preview.id)?.status, .prepared)
+        let gateCalls = await gate.observedCallCount()
+        XCTAssertEqual(gateCalls, 1)
+        let counts = await transport.callCounts()
+        XCTAssertEqual(counts.inventory, 0)
+        XCTAssertEqual(counts.archive, 0)
     }
 
     func testActiveMovesToTrashOnlyAfterArchivedReadback() async throws {
@@ -121,6 +188,158 @@ final class CodexNativeArchiveCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(report.outcome, .failure)
         XCTAssertTrue(try store.trashMemberships(for: .codex).isEmpty)
+    }
+
+    func testReapplyTrashIntentArchivesOnceAndPreservesExactMembership() async throws {
+        let fixture = try makeFixture()
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try store.upsertProviderCheckpoint(fixture.checkpoint)
+        let membership = makeMembership(fixture: fixture)
+        try store.saveTrashMembership(membership, checkpoint: fixture.checkpoint)
+        let state = makeConflictState(fixture: fixture, membership: membership)
+        let transport = NativeArchiveTransportStub(
+            preflight: fixture.snapshot,
+            readback: try readbackSnapshot(state: .archived)
+        )
+        let coordinator = makeCoordinator(store: store, transport: transport)
+
+        let preview = try await coordinator.prepareReapplyTrashIntent(
+            state: state,
+            snapshot: fixture.snapshot,
+            checkpoint: fixture.checkpoint
+        )
+
+        XCTAssertEqual(preview.operation, .archive)
+        XCTAssertEqual(preview.items.first?.beforeCollection, .trash)
+        XCTAssertEqual(preview.items.first?.targetCollection, .trash)
+        let frozen = try XCTUnwrap(store.operationPreview(id: preview.id))
+        XCTAssertNil(frozen.trashMembershipMutation)
+        XCTAssertEqual(
+            frozen.expectedTrashMembershipSetHash,
+            try ConflictResolutionHasher.membershipSetHash([membership])
+        )
+
+        let report = try await coordinator.execute(
+            preview: preview,
+            confirmationToken: preview.confirmationToken
+        )
+
+        XCTAssertEqual(report.outcome, .success)
+        XCTAssertTrue(report.preservedTrashIntent)
+        XCTAssertEqual(try store.trashMemberships(for: .codex), [membership])
+        let counts = await transport.callCounts()
+        XCTAssertEqual(counts.archive, 1)
+        XCTAssertEqual(counts.archiveIDs, [nativeID])
+    }
+
+    func testReapplyTrashIntentMembershipDriftBeforeClaimSendsNoArchive() async throws {
+        let fixture = try makeFixture()
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try store.upsertProviderCheckpoint(fixture.checkpoint)
+        let membership = makeMembership(fixture: fixture)
+        try store.saveTrashMembership(membership, checkpoint: fixture.checkpoint)
+        let transport = NativeArchiveTransportStub(
+            preflight: fixture.snapshot,
+            readback: try readbackSnapshot(state: .archived)
+        )
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepareReapplyTrashIntent(
+            state: makeConflictState(fixture: fixture, membership: membership),
+            snapshot: fixture.snapshot,
+            checkpoint: fixture.checkpoint
+        )
+        _ = try store.removeTrashMembership(managerKey: fixture.session.id)
+
+        do {
+            _ = try await coordinator.execute(
+                preview: preview,
+                confirmationToken: preview.confirmationToken
+            )
+            XCTFail("Trash membership drift must reject the durable claim.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Trash membership"))
+        }
+
+        XCTAssertEqual(try store.operationPreview(id: preview.id)?.status, .prepared)
+        let counts = await transport.callCounts()
+        XCTAssertEqual(counts.inventory, 0)
+        XCTAssertEqual(counts.archive, 0)
+    }
+
+    func testReapplyTrashIntentMembershipDriftAfterArchiveLeavesExecutingForRecovery() async throws {
+        let fixture = try makeFixture()
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try store.upsertProviderCheckpoint(fixture.checkpoint)
+        let membership = makeMembership(fixture: fixture)
+        try store.saveTrashMembership(membership, checkpoint: fixture.checkpoint)
+        let transport = NativeArchiveTransportStub(
+            preflight: fixture.snapshot,
+            readback: try readbackSnapshot(state: .archived),
+            onArchive: {
+                _ = try store.removeTrashMembership(managerKey: fixture.session.id)
+            }
+        )
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepareReapplyTrashIntent(
+            state: makeConflictState(fixture: fixture, membership: membership),
+            snapshot: fixture.snapshot,
+            checkpoint: fixture.checkpoint
+        )
+
+        do {
+            _ = try await coordinator.execute(
+                preview: preview,
+                confirmationToken: preview.confirmationToken
+            )
+            XCTFail("Report commit must reject manager Trash intent drift.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("audit Report"))
+        }
+
+        XCTAssertEqual(try store.operationPreview(id: preview.id)?.status, .executing)
+        let counts = await transport.callCounts()
+        XCTAssertEqual(counts.archive, 1)
+    }
+
+    func testReapplyTrashIntentRecoveryPreservesMembershipWithoutResending() async throws {
+        let fixture = try makeFixture()
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try store.upsertProviderCheckpoint(fixture.checkpoint)
+        let membership = makeMembership(fixture: fixture)
+        try store.saveTrashMembership(membership, checkpoint: fixture.checkpoint)
+        let transport = NativeArchiveTransportStub(
+            preflight: fixture.snapshot,
+            readback: fixture.snapshot
+        )
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepareReapplyTrashIntent(
+            state: makeConflictState(fixture: fixture, membership: membership),
+            snapshot: fixture.snapshot,
+            checkpoint: fixture.checkpoint
+        )
+        _ = try store.claimOperationPreviewForExecution(
+            id: preview.id,
+            now: observedAt.addingTimeInterval(31),
+            confirmationTokenHash: ArchiveExecutionHasher.confirmationTokenHash(
+                preview.confirmationToken
+            )
+        )
+        let recovery = CodexNativeArchiveRecoveryCoordinator(store: store)
+
+        let recovered = try await recovery.recoverPending(
+            using: readbackSnapshot(state: .archived)
+        )
+        let report = try XCTUnwrap(recovered)
+
+        XCTAssertEqual(report.outcome, .success)
+        XCTAssertTrue(report.preservedTrashIntent)
+        XCTAssertEqual(try store.trashMemberships(for: .codex), [membership])
+        let counts = await transport.callCounts()
+        XCTAssertEqual(counts.archive, 0)
     }
 
     func testActiveToTrashRecoveryAddsMembershipFromReadbackWithoutResending() async throws {
@@ -198,7 +417,7 @@ final class CodexNativeArchiveCoordinatorTests: XCTestCase {
     }
 
     func testUnauditedRuntimeCannotCreateProductionPreview() async throws {
-        let fixture = try makeFixture(runtime: "0.148.0")
+        let fixture = try makeFixture(runtime: "0.150.0")
         let store = try makeStore(named: #function)
         defer { store.close() }
         try store.upsertProviderCheckpoint(fixture.checkpoint)
@@ -215,11 +434,15 @@ final class CodexNativeArchiveCoordinatorTests: XCTestCase {
                 checkpoint: fixture.checkpoint
             )
             XCTFail("An unaudited runtime must fail before Preview persistence.")
-        } catch let error as PersistentStateError {
-            guard case .invalidRecord(let message) = error else {
-                return XCTFail("Unexpected persistence error: \(error)")
+        } catch let error as SessionManagerError {
+            guard case .unsupportedOperation(let message) = error else {
+                return XCTFail("Unexpected operation error: \(error)")
             }
-            XCTAssertTrue(message.contains("allow-list"))
+            XCTAssertEqual(
+                message,
+                "Archive is unavailable because Codex runtime 0.150.0 is outside this version of Agent Session Manager's audited lifecycle allow-list. Open Settings → Compatibility and run the isolated tests to verify this installation. No Archive request was sent."
+            )
+            XCTAssertFalse(error.localizedDescription.contains("persistent state"))
         }
 
         XCTAssertNil(try store.operationPreview(id: previewID))
@@ -365,12 +588,14 @@ final class CodexNativeArchiveCoordinatorTests: XCTestCase {
             isRunningKnown: false,
             isCurrentKnown: false
         ),
-        runtime: String? = nil
+        runtime: String? = nil,
+        observationTime: Date? = nil
     ) throws -> (
         session: AgentSession,
         snapshot: ProviderInventorySnapshot,
         checkpoint: ProviderCheckpointRecord
     ) {
+        let observedAt = observationTime ?? self.observedAt
         let session = AgentSession(
             system: .codex,
             nativeID: nativeID,
@@ -443,13 +668,52 @@ final class CodexNativeArchiveCoordinatorTests: XCTestCase {
         )
     }
 
+    private func makeMembership(
+        fixture: (
+            session: AgentSession,
+            snapshot: ProviderInventorySnapshot,
+            checkpoint: ProviderCheckpointRecord
+        )
+    ) -> TrashMembershipRecord {
+        TrashMembershipRecord(
+            provider: .codex,
+            nativeSessionID: fixture.session.nativeID,
+            managerKey: fixture.session.id,
+            titleAtEntry: fixture.session.title,
+            workingDirectoryAtEntry: fixture.session.workingDirectory,
+            nativeStateAtEntry: .archived,
+            providerInventoryHashAtEntry: fixture.checkpoint.inventoryHash,
+            enteredAt: observedAt.addingTimeInterval(-20),
+            lastReconciledAt: observedAt
+        )
+    }
+
+    private func makeConflictState(
+        fixture: (
+            session: AgentSession,
+            snapshot: ProviderInventorySnapshot,
+            checkpoint: ProviderCheckpointRecord
+        ),
+        membership: TrashMembershipRecord
+    ) -> ReconciledSessionState {
+        ReconciledSessionState(
+            managerKey: fixture.session.id,
+            liveSession: fixture.session,
+            trashMembership: membership,
+            status: .nativeActiveTrashConflict,
+            isStableForLifecyclePreview: false
+        )
+    }
+
     private func makeCoordinator(
         store: SQLiteStateStore,
-        transport: NativeArchiveTransportStub
+        transport: NativeArchiveTransportStub,
+        executionGate: any CodexLifecycleExecutionChecking = LifecycleExecutionGateStub()
     ) -> CodexNativeArchiveCoordinator {
         CodexNativeArchiveCoordinator(
             store: store,
             transport: transport,
+            executionGate: executionGate,
             now: { self.observedAt.addingTimeInterval(30) },
             makePreviewID: { self.previewID },
             makeReportID: { self.reportID }
@@ -482,6 +746,7 @@ private actor NativeArchiveTransportStub: ArchiveMutationTransport {
     private let preflight: ProviderInventorySnapshot
     private let readback: ProviderInventorySnapshot
     private let archiveError: Error?
+    private let onArchive: @Sendable () throws -> Void
     private var inventoryCalls = 0
     private var archiveCalls = 0
     private var archiveIDs: [String] = []
@@ -489,11 +754,13 @@ private actor NativeArchiveTransportStub: ArchiveMutationTransport {
     init(
         preflight: ProviderInventorySnapshot,
         readback: ProviderInventorySnapshot,
-        archiveError: Error? = nil
+        archiveError: Error? = nil,
+        onArchive: @escaping @Sendable () throws -> Void = {}
     ) {
         self.preflight = preflight
         self.readback = readback
         self.archiveError = archiveError
+        self.onArchive = onArchive
     }
 
     func inventorySnapshot() throws -> ProviderInventorySnapshot {
@@ -504,6 +771,7 @@ private actor NativeArchiveTransportStub: ArchiveMutationTransport {
     func archive(nativeSessionID: String) throws {
         archiveCalls += 1
         archiveIDs.append(nativeSessionID)
+        try onArchive()
         if let archiveError { throw archiveError }
     }
 

@@ -206,6 +206,8 @@ public enum FolderTrustState: String, Codable, Hashable, Sendable {
 }
 
 public struct AgentSession: Identifiable, Codable, Hashable, Sendable {
+    /// Presentation provenance, not a lifecycle authorization shortcut.
+    public var supplementalSourceLabel: String? = nil
     public let system: AgentSystem
     public let nativeID: String
     public var title: String

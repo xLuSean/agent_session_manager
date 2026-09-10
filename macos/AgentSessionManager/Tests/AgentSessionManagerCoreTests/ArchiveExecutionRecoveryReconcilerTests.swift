@@ -161,7 +161,7 @@ final class ArchiveExecutionRecoveryReconcilerTests: XCTestCase {
 
     func testRuntimeMismatchAndStaleReadbackBothLeaveExecuting() async throws {
         for (name, readback) in [
-            ("runtime", snapshot(sessions: [session()], runtime: "0.148.0")),
+            ("runtime", snapshot(sessions: [session()], runtime: "0.149.0")),
             ("stale", snapshot(
                 sessions: [session()],
                 observedAt: createdAt.addingTimeInterval(-1)

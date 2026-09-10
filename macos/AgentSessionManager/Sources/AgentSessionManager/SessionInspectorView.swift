@@ -43,7 +43,8 @@ struct SessionInspectorView: View {
                                 session.isStableForLifecyclePreview ? "Stable" : "Blocked"
                             )
                             detailRow("Updated", session.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                            detailRow("Size", session.sizeBytes.map(ByteCountFormatter.string) ?? "Unknown")
+                            detailRow("Conversation size", model.conversationFileSizeLabel(for: session))
+                                .help(model.conversationFileSizeHelp)
                             detailRow(
                                 "Descendants",
                                 session.descendantCountKnown ? "\(session.descendantCount)" : "Unavailable"
@@ -56,17 +57,17 @@ struct SessionInspectorView: View {
                             }
                         }
 
-                        detailSection("Archive readiness") {
-                            Text("Evaluate the frozen live evidence for the first single-session Archive slice. This review never sends a lifecycle request.")
+                        detailSection("Archive") {
+                            Text("Review this conversation before archiving. Archived conversations can be restored.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
-                            Button("Review Archive Readiness") {
-                                model.reviewArchiveReadiness()
+                            Button("Archive") {
+                                Task { await model.requestPreview(.archive) }
                             }
-                            .disabled(!model.canReviewArchiveReadiness)
+                            .disabled(!model.canRequestPreview(.archive))
                             .immediateHelp(
-                                model.archiveReadinessReviewBlockedReason
-                                    ?? "Open the read-only Archive readiness report"
+                                model.blockedReason(for: .archive)
+                                    ?? "Review and confirm Archive"
                             )
                         }
 

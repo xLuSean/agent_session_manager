@@ -116,7 +116,7 @@ final class ArchiveIsolatedSessionAcceptanceTests: XCTestCase {
                 .evidenceUnavailable("official inventory is incomplete")
             ),
             (
-                try readySnapshot(runtimeVersion: "0.148.0"),
+                try readySnapshot(runtimeVersion: "0.150.0"),
                 .evidenceUnavailable("runtime is outside the verified lifecycle contract")
             ),
             (

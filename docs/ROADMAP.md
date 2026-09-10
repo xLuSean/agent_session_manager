@@ -1,156 +1,58 @@
-# Roadmap
+# 後續方向
 
-Roadmap 以 safety gate 而不是日期排序。前一 phase 的 exit criteria 未完成，不開啟下一 phase 的 destructive capability。
+既有本機交付已收尾；目前正在實作 App 內的 Codex 相容性檢查。版本與仍缺的大量 App 實機證據見[驗收狀態](VALIDATION.md)。不為補數字刪除真實對話。
 
-## Phase 0 — Fixture POC
+產品目前只支援 Codex Live。官方 lifecycle、Desktop 殘留、獨立設定 diff 與 ASM 完成紀錄各自有明確邊界；大量批次目標與不能降低的規則見[安全規則](SAFETY.md)。
 
-狀態：**完成**
+## 目前工作：App 內相容性驗證
 
-- [x] Swift Package Core library/tests + 正式 Xcode SwiftUI App target；已移除容易與 `.app` scheme 混淆的同名 SwiftPM command-line executable
-- [x] Provider protocol 與 capability model
-- [x] Archive / Trash / Deleted manager collections
-- [x] Preview / confirmation / report flow
-- [x] 可逆 lifecycle 使用 explicit Confirm；不可逆 Delete／History clear 使用 typed token
-- [x] pinned / running / current / pinned descendant model
-- [x] full session ID in table, inspector, Preview, Report
-- [x] fixture-only banner與明確 no-live-session boundary
-- [x] lifecycle core tests
-- [x] standalone Xcode App-layer tests：同時build正式App並測試`SessionManagerModel`狀態，不以shipping App作test host、不連live provider
-- [x] architecture, safety, UI, roadmap, TODO, handoff docs
+目標是相容的 Codex 更新可在使用者本機驗證後繼續使用，不必只為更新版本清單重建 ASM；不承諾任意介面或資料結構變更都能自動適配。
 
-Exit criteria：app 能編譯、tests 全過、fixture lifecycle 可操作、沒有真實 session access。
+目前交付範圍：build 15 修正 build 14 的 App 探索與索引誤判，供更新前後版本偵測／提醒／快取與 CLI 驗證，**不是新版 Desktop 清理已全面放行**。先依使用手冊保留更新前結果，再更新 Codex 比對；不需要為這輪測試刪除真實對話。剩餘工作集中在下列 Desktop 放行整合，不加入其他功能支線。
 
-## Phase 1 — Codex read-only inventory
+- [x] 第一階段：App 內唯讀檢查、分功能報告、本機保存，以及執行檔／結構變更後失效。原始碼已接上，尚未打包或人工驗收。
+- [x] 啟動／回前景只比對已保存的環境結果；最多記住 15 組，不自動重跑測試。環境有變或功能未通過時顯示主畫面提醒、版本、原因與檢查入口，Later 保留精簡入口。
+- [x] 前置補強：批次 Delete／中斷恢復核對原版本、身分及回讀時間，缺席證據保留實際來源；不符時不記錄成功、不重送。原始碼與回歸測試完成，尚未打包。
+- [x] 第二階段原始碼：使用者另行確認後，在禁止網路及私人資料存取的隔離目錄，建立測試對話驗證封存、還原與刪除；分組保存結果，失敗不重送。App 已接上；模擬執行檔及本機 Codex CLI `0.153.4` 隔離驗收通過，打包 App 人工驗收仍待完成。
+- [x] 第三階段核心入口：App Server client 送出前，以實際初始化回報的資料目錄重新核對環境與獨立通過的功能，建立 60 秒內有效、不保存的許可；新版 Delete 缺席證據另要求本機資料庫與對話檔缺席。保存的報告本身不能當成執行許可。
+- [x] 第三階段產品整合原始碼：UI 能力、預覽、單筆／批次執行及中斷恢復共用已驗證環境綁定；逐功能允許本機測試通過的新版。確認資料綁定環境，送出與回讀仍核對；同版本換檔、換目錄或證據失效不沿用舊確認。尚未打包或人工驗收。
+- [x] Desktop SQL 自我測試：App 明確確認後，以已知欄位契約及記憶體假資料執行正式清理共用 SQL；核對混合批次、保留範圍及失敗回復，結果保存但不授予新版 Desktop 權限。
+- [x] Desktop 必要結構檢查：四個資料庫共用正式快照讀取的必要欄位契約，另核對普通資料表、Desktop 索引集合及寫入資料庫的觸發器／外鍵。設定頁逐檔說明，規則版本 2 使舊結果失效；不等同完整 DDL 或行為驗收。
+- [x] 隔離磁碟自我測試：假資料落盤後，核對雙資料庫備份的內容與重新開啟、正式共用 SQL 的交易／回復、清理後冷讀，以及備份還原至另一份測資；損壞備份在清理前拒絕。不碰真實對話。
+- [x] Desktop App 身分綁定：本機驗證簽章涵蓋的資源與內嵌程式，快取另綁定 App 主程式及 bundled CLI 的內容；同版本替換、未重新簽章的修改均使舊結果失效。設定頁分開顯示 App 版本／build，規則版本 3 要求舊結果重查一次；此項不授予新版清理權限。
+- [ ] Desktop 放行整合：完整資料結構、正式備份管線、執行檔綁定及真正 App 重開行為。磁碟自我測試不代表斷電／程序崩潰恢復，也不直接授予私人資料庫寫入權限；未知結構仍需程式適配。
+- [ ] 接上完整流程後，再進行 App 驗證與 DMG 交付；不在檢查過程中自動操作使用者的真實對話。
 
-狀態：**進行中（paginated read-only inventory 已完成）**
+## lifecycle 完整性
 
-目標：只讀列出 live Codex tasks，絕不 mutation。
+- [ ] 工程：完成子對話 affected-set 唯讀 Preview 與 executor 整合；完成前持續拒絕未支援範圍。
+- [ ] 工程：補 current-task 保護、置頂子對話／running 漂移、外部還原／刪除及同名對話／專案的整合測試。
+- [ ] 工程：跟進官方版本化 exact-ID not-found 與跨主機保護契約；未取得前不把列表漏項、未知 running／current 當成已驗證不存在或無占用。
+- [ ] 使用者＋工程：未來有實際大量清理需求時，再約定精確範圍驗證大量 App 實機行為；不擅自建立刪除工作。
 
-- [x] 建立 `CodexAppServerProvider` read-only adapter。
-- [x] 使用官方 App Server `thread/list` interface，不掃描 JSONL 當 canonical source。
-- [x] 解析 active / archived、title、Desktop project、working folder、folder trust、updated time、full ID；Project 只由 `local-projects` root 配對，不由 trust 或 Git origin 推定。
-- [x] 驗證 safety-state 來源：descendant graph 可由完整 all-source inventory 驗證；`status.active` 只提供 running 正向證據；本機 0.147.0 的 pinned、跨 host running=false、current 仍 unavailable，且 mutation 維持 disabled。
-- [x] capability probe、connection diagnostics 與 Codex version reporting。
-- [x] 早期開發 UI 曾提供 Fixture / Codex Live switch；production boundary完成後已從shipping App移除，Live inventory adapter維持read-only。
-- [x] unavailable/unknown 欄位不得被推定為 false。
-- [x] Inspector 以逐欄位三態 evidence 顯示 protection verdict、來源與 fail-closed 理由。
-- [x] 加入 cursor pagination，正常讀到 `nextCursor=null`；以 10,000 筆／collection hard cap 與 repeated-cursor detection 保持有界。
+## 儲存與恢復
 
-Exit criteria：多次 refresh 可與 Codex Desktop UI / App Server readback 對照；任何欄位不確定時 mutation capability 仍為 false。
+- [ ] 工程：設計全域設定私人備份的明確保留／清理介面，不混入 30 天操作紀錄清理。
+- [ ] 工程：完成 store 關閉後的還原 command／UI、pre-restore 備份及 rollback 驗證。
+- [ ] 工程：為 migration／pre-restore 備份候選提供 frozen Preview、回讀及 macOS Trash executor。
+- [ ] 工程：壓縮資料庫前先備份與驗證 replacement，不自動 VACUUM。
+- [ ] 工程：報告區分 known bytes、verified released bytes、未知大小與穩定錯誤碼。
+- [ ] 工程：補冷啟動遺失原 challenge 後的 receipt-only discovery／明確選取；目前缺證據仍不能重新 Confirm。
+- [ ] 工程：進一步整合 Deleted／Report History 呈現；現有保留及清理功能不重列為待實作。
 
-## Phase 2 — Durable manager state and reconciliation
+## 易用性
 
-狀態：**進行中（SQLite v8、reconciliation、單筆與checkbox batch的Archive／Restore／Active ↔ Trash／Trash → Deleted finalization已完成）**
+- [ ] 工程：批次摘要可展開完整 ID；Project、日期與標題協助建立選取，但確認後不重新查詢擴張。
+- [ ] 工程：Trash 保留時間 badge，不自動永久刪除。
+- [ ] 工程＋使用者：鍵盤操作、VoiceOver、dark mode、Dynamic Type、在地化及 empty／error／loading 狀態驗收。
+- [ ] 工程：解釋或修正 All Projects 與各專案計數範圍差異，改善大清單載入回饋。
 
-目標：建立 Archive 與 Trash intent 的可靠 local source of truth。
+## 工程與擴充
 
-- [x] SQLite v8 schema、v0→…→v8 transaction migration、migration前backup與可逆Core restore；v4保存distinct manager intent，v5保存success-only Trash membership `add/remove` intent，v6保存frozen working-directory evidence，v7保存verified Deleted tombstone，v8支援一份batch Delete Report對應多筆tombstone。
-- [x] Migration backup / failure rollback / restore safety backup tests。
-- [x] Typed provider checkpoint、Trash membership、operation Preview/Report repositories 與 transaction tests。
-- [x] 純 Core reconciliation matrix：normal、external restore conflict、externally missing、incomplete/unavailable。
-- [x] Snapshot coordinator：canonical hash、complete-only authoritative commit、partial/failure/stale fail closed。
-- [x] Production store lazy bootstrap、conflict-capable presentation model 與 Live read-only app integration。
-- [x] Conflict resolution proposal：frozen evidence、可考慮選項、必要證據與 blocked reasons。
-- [x] Active + Manager Trash 的 Accept Native Restore：durable token Preview、fresh inventory、完整 drift check、原子 membership removal／Report／Preview consume與 readback；無 provider transport。
-- [x] Official `thread/read` exact-ID presence evidence；undocumented missing/error results remain Unavailable。
-- [x] Exact-ID failure taxonomy、RPC code evidence 與 version-exact absence contract gate；0.147.0 因官方未定義 not-found discriminator 而維持無 contract。
-- [x] Trash membership、operation Preview、Report、provider checkpoint persistence primitives。
-- [x] App 啟動 / refresh reconciliation。
-- 外部 archive / delete conflict Apply 與 authoritative absence readback（Accept Native Restore、proposal/UI 與 exact presence 已完成）。
-- [x] Report history/search UI、privacy-safe JSON／CSV export 與 macOS save panel（不包含 conversation content；Fixture 不建立 production store）。
-- [x] Report History Clear Filtered Reports：frozen exact IDs、typed confirmation、transaction bundle deletion、drift rollback與 readback；保留所有 lifecycle state。
-- [x] Test-only Fixture bounded ephemeral Report ledger：重用history query/export model，test process退出時清空，不寫production SQLite。
-- [x] Provider-scoped bounded report retention：預設 500 份，完整 bundle 原子 pruning 與 rollback tests。
-- [x] Settings Diagnostic Logs：獨立0600 JSONL、30天／10,000 events／20 MB三重retention、sensitive metadata denylist、corrupt-line recovery、Unified Logging mirror、filters/detail/Copy/Export UI。
-- [x] SQLite maintenance proposal + read-only UI：精確 verified/0600 backup inventory、每類 3 份／30 天 retention gate、100 candidates hard cap，以及 16 MiB／20% physical compaction assessment；沒有 executor。
-- [x] native Archived session 的 Archive ↔ Trash manager-only execution：fresh complete inventory、frozen manifest、protection gate、membership drift check、原子 Report/Preview consume 與 post-commit readback；不具備 Codex lifecycle capability。
+- [ ] 工程：自動檢查共用 SwiftUI 的 Xcode target membership，加入 provider contract test kit。
+- [ ] 工程：若配置 CI，沿用 ./scripts/verify.sh，不維護第二套驗證邏輯。
+- [ ] 工程：診斷匯出增加可選的 project／user path 遮蔽，持續拒絕對話本文、prompt、token 與原始 payload。
+- [ ] 使用者先決定：新增 provider 先做唯讀 inventory、獨立 Fixture、能力映射與保護證據；不沿用 Codex 刪除語意，不跨 provider 混批。
+- [ ] 使用者先決定：只有需要公開二進位發行時，才安排 Developer ID、公證、架構、clean-Mac 驗收與可能的 helper／XPC 安全設計；不是開源或本機 DMG 的前置要求。
 
-Exit criteria：crash/relaunch、schema migration、state corruption recovery、external change scenarios 都有 tests。
-
-## Phase 3 — Safe Archive / Trash / Restore mutations
-
-狀態：**進行中（manager-only Archive ↔ Trash、single-item native Archive，以及 manager Archive → Active native Restore 已接 production path）**
-
-目標：開啟可恢復的 lifecycle operation，仍不永久刪除。
-
-- [x] 以本機 0.147.0 generated schema 驗證 `thread/archive` / `thread/unarchive` interface，且與 manager execution capability 分離。
-- [x] 第一個 operation slice 的 typed readiness assessor：exact single selection、active Codex root、stable reconciliation、完整 checkpoint/runtime binding、exact readback、protection、零 descendants、executor gate。
-- [x] 新增獨立 writer-authority gate：evidence 綁 exact native ID、runtime、inventory hash 與 authoritative checkpoint；separate-process idle/readback 不得解鎖。
-- [x] Live UI 顯示逐項 readiness verdict；readiness 本身不送 lifecycle request，全部 permits attempt 後才進入 persisted Preview／explicit Confirm。
-- [x] 建立 typed protection authority scope：窄 scope positive observation 可保護，只有完整 authority scope 的 negative observation 可 clear；Codex process-local idle 不得解鎖。
-- [x] 建立 module-internal single-Archive executor contract：runtime-bound canonical manifest、完整 preflight、zero-descendant gate、一次官方 request、fresh exact-ID inventory readback，以及 success/failure/timeout/stale/unknown synthetic tests。
-- [x] 建立 manager/native operation plan：Active → Trash 映射一次 Archive；Archive → Trash 與 Trash → Archive 僅改 membership；Trash → Active 映射 Unarchive；Delete 僅接受 Trash。Capability 依實際 native/membership mutation 分開檢查。
-- [x] 接通 Archive → Trash 與 Trash → Archive 的 production SwiftUI path；它只操作 manager SQLite，Codex native state readback 必須持續為 Archived。
-- [x] 建立 SQLite authorization coordinator：prepared Preview 先原子落盤並 claim 為不可 replay 的 `executing`，execution 後 success/failure/unknown itemized Report 原子 consume exact frozen item set。
-- [x] 建立 unresolved `executing` reconciliation：crash 或 Report persistence failure 後只做 original-checkpoint-bound official inventory readback/report repair；recovery 型別沒有 mutation capability，證據不足保留 executing。
-- [x] 建立 descendant-aware affected-set planner 與 SQLite v2 persistence：exact root/descendants、parent/native state、role/depth、checkpoint binding 與 canonical hash；現有 executor 明確拒絕，尚無 UI/batch mutation。
-- [x] 定義並持久化 non-transactional provider 的 batch atomicity contract：全批 preflight、deterministic root order、first non-success stop、batch/unit/item 三層 partial/unknown/not-attempted finalization，以及 SQLite v3 plan/member/report 原子 claim/consume；仍無 transport/executor/UI。
-- [x] 查證官方 Unix/WebSocket control-socket route：本機 Desktop 0.147.0-alpha.6.5 仍由 ChatGPT parent 以 default stdio 啟動；managed socket 不存在，Homebrew/Desktop install 無法啟動 installer-managed daemon，短生命週期 Unix listener + proxy 亦未完成 WebSocket handshake。Shared host 只改善事前 writer visibility，不是官方 Archive attempt 的必要條件。
-- [x] 使用 test-only harness 送出一次真實 isolated Archive：2026-08-13 App Server 以 `-32600` 拒絕，readback 證明仍為 Active；已驗證 failure report 與 no-retry。Desktop writer ownership 與 upstream 同型測試支持 active-writer 診斷，但舊 Report 未保存原始 RPC message；Archive success path 尚未完成本 App 的 live acceptance。
-- [x] 將 readiness 改為 operation-specific：positive writer/running/current 仍阻擋；unknown 顯示 `attemptMayFail` 並只允許 allow-listed Archive 的 one-shot + fresh-readback contract，不得標成 Verified clear。Core/UI typed verdict 與 tests 已完成。
-- [x] 將 affected-set Preview factory、SQLite save/claim、single-item executor 與 recovery 的 aggregate `protectionComplete` gate 改為相同 operation-specific contract；positive protection 仍阻擋，pinned／pinned-descendant unknown 仍 fail closed，running/current unknown 只可 one-shot + fresh readback/no-retry。
-- [x] 取得 pinned 與 pinned-descendant evidence：雙讀一致的 Codex Desktop `pinned-thread-ids` + 完整 all-source graph；缺失、漂移或雙來源衝突仍禁止 Archive。
-- [x] App Server single-root Archive integration：public facade 封裝 internal transport／authorization／executor；SwiftUI 已接 persisted Preview、explicit Confirm、one-shot execution 與 success／failure／unknown Report。本機 runtime 仍由 pin evidence gate 阻擋。
-- [ ] 完成 App 可見 Archive success／Busy failure／unknown live acceptance；未來 runtime pin contract 上線後仍須重新 audit exact version與雙來源一致性。
-- [x] 將 readback-only unresolved `executing` recovery 接到 app startup／refresh：沿用第一個完整 official snapshot、保留原 checkpoint、補寫 Report 後再 refresh；facade 無 Archive capability，多筆 executing fail closed。
-- [x] 接通 manager Archive → Active 的 single-item native Restore：durable Preview/token/claim、一次 `thread/unarchive`、fresh Active readback、success/failure/unknown Report與 readback-only crash recovery；Restore 不套用 Archive-only protection gate。
-- [x] Active → Trash／Trash → Active：SQLite v5 durable freeze membership `add/remove` intent，v6另凍結working directory；native Archived／Active success、SQLite membership、Report與 Preview consume使用可恢復的原子 finalization，failure/unknown不改 membership且 recovery不重送 lifecycle request。
-- Active → Archive、Active/Archive → Trash、Trash → Active/Archive。
-- persistence 已有 manifest hash／expiry／provider inventory hash；production facade 已強制 Preview-first claim 與 Report-after consume，readback-only unresolved execution recovery 也已接 app startup／refresh。
-- [x] 所有一般zero-descendant lifecycle operation的row-checkbox multi-selection batch executor與history/UI mapping；只有Trash Bin提供三態Select All checkbox bar，其他Status只有逐列checkbox。Descendant affected-set batch仍是另一個未完成scope。
-- unknown outcome readback，不盲目 retry。
-- statistical and itemized report persistence。
-- 與 `codex-retire-sessions` skill 的 parity suite。
-
-Exit criteria：success／Busy failure／unknown／crash recovery 與 failure injection 均有驗證；pinned／pinned descendant 永不被 mutation，running/current writer conflict 由 positive pre-block 或官方 Busy rejection 保持原狀。
-
-## Phase 4 — Permanent delete / Empty Trash
-
-目標：只從 Trash 執行 verified permanent deletion。
-
-狀態：**單筆與checkbox batch Trash → Deleted已完成；既有single／batch人工驗收與持久證據已整理於`DELETE_ACCEPTANCE.md`。**
-
-- [x] 風險分級 confirmation：Archive、Restore 與 Archive ↔ Trash 使用 frozen Preview + explicit Confirm；Permanent Delete 與 Report History clear 保留 typed confirmation token、Copy button 與 destructive affordance。
-- [x] exact-ID delete via audited official App Server `thread/delete`。
-- [x] 單筆雙 readback，判定 absent / failed / unknown。
-- [x] 不宣稱或估算 released disk bytes；Archive仍明確回報 0 B released。
-- [x] 單筆 unknown／interrupted readback-only recovery workflow，不重送Delete。
-- [x] checkbox batch／Empty Trash exact filtered selection與partial/`batch_not_attempted` report。
-- [x] Delete operation-specific protection gate：positive protection與unknown pin／pinned-descendant阻擋；cross-host running/current unknown顯示`attemptMayFail`並允許one-shot request。
-- retention policy Preview（自動建立 Preview，不自動確認）。
-
-Exit criteria：不得從 Active/Archive 呼叫 delete；timeout、version drift、partial completion 均有可稽核 report。
-
-## Phase 5 — Multi-agent provider SDK
-
-目標：在不假設共同 semantics 的前提下支援其他 agent system。
-
-- provider discovery and registration。
-- capability-driven UI。
-- per-provider state mapping documentation。
-- provider conformance tests。
-- 新增獨立的 ChatGPT conversation provider：Chat／Work 與 Codex 雖位於同一個桌面 App 並共用 OpenAI 帳號，仍須使用各自的 inventory、identity namespace 與 lifecycle semantics；不得把 Codex App Server `thread/list` 視為一般 ChatGPT conversation history。
-- 在 ChatGPT 沒有可驗證的官方 conversation lifecycle interface 前，相關 inventory 與 Archive／Delete capability 一律標示 unavailable，不讀寫 ChatGPT 內部資料庫、cache 或其他私有檔案。
-- mixed-provider batch remains prohibited unless future transaction semantics can prove safety。
-
-Exit criteria：至少第二個 provider 完成 read-only；若第二個 provider 為 ChatGPT，必須證明 inventory 不混入 Codex history；其 mutation 必須另行通過 safety review。
-
-## Phase 6 — Distribution and operations
-
-- sandboxed frontend + scoped helper/XPC architecture。
-- [x] Local ad-hoc signed DMG script、mounted-content readback 與 SHA-256 output。
-- [x] Public app target 移除 Fixture product mode：啟動直接進 Codex Live，不顯示 Fixture/Live switch，shipping target 不可到達 `FixtureSessionProvider`；Fixture support拆到獨立target，只留在 deterministic tests 與內部開發 harness。
-- Developer ID signing、notarization、Universal 2 decision、clean-Mac acceptance 與 auto-update。
-- privacy disclosure and diagnostics export。
-- observability without conversation-content leakage。
-- backup/restore UX。
-- compatibility matrix and release rollback。
-
-## Long-term relationship with the skill
-
-在 app 未達 parity 前，`codex-retire-sessions` skill 是真實操作 fallback。當 app 成為 canonical manager 後，skill 應縮成：
-
-- 呼叫 app/helper 的同一 typed API，或
-- 只做自然語言 selection → Preview request。
-
-skill 與 app 不應各自維護 Trash membership 或 report ledger，避免雙重 source of truth。
+沒有新需求時可繼續使用現有版本。遇到 unknown 或刪後重現，保存原結果並依[使用手冊](USER_GUIDE.md)回報，不重跑舊實驗或自行再次刪除。

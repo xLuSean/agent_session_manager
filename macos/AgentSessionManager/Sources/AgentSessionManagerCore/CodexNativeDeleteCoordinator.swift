@@ -192,6 +192,7 @@ public struct NativeDeleteReport: Identifiable, Sendable {
 public actor CodexNativeDeleteCoordinator {
     private let store: SQLiteStateStore
     private let authorization: DeleteAuthorizationCoordinator
+    private let executionGate: any CodexLifecycleExecutionChecking
     private let now: @Sendable () -> Date
     private let makePreviewID: @Sendable () -> UUID
 
@@ -207,6 +208,7 @@ public actor CodexNativeDeleteCoordinator {
             store: store,
             executor: DeleteMutationExecutor(transport: transport)
         )
+        self.executionGate = CodexDesktopLifecycleExecutionGate()
         self.now = { Date() }
         self.makePreviewID = { UUID() }
     }
@@ -214,6 +216,7 @@ public actor CodexNativeDeleteCoordinator {
     init(
         store: SQLiteStateStore,
         transport: any DeleteMutationTransport,
+        executionGate: any CodexLifecycleExecutionChecking,
         now: @escaping @Sendable () -> Date,
         makePreviewID: @escaping @Sendable () -> UUID,
         makeReportID: @escaping @Sendable () -> UUID
@@ -225,6 +228,7 @@ public actor CodexNativeDeleteCoordinator {
             now: now,
             makeReportID: makeReportID
         )
+        self.executionGate = executionGate
         self.now = now
         self.makePreviewID = makePreviewID
     }
@@ -252,11 +256,10 @@ public actor CodexNativeDeleteCoordinator {
                 "Permanent Delete requires the exact complete inventory checkpoint."
             )
         }
-        guard let runtimeVersion = checkpoint.runtimeVersion,
-              CodexAppServerProvider.supportsVerifiedDeleteContract(runtimeVersion) else {
-            throw PersistentStateError.invalidRecord(
-                "The observed Codex runtime is outside the audited Permanent Delete allow-list."
-            )
+        let runtimeVersion = checkpoint.runtimeVersion ?? ""
+        if let reason = CodexLifecycleMutationKind.permanentDelete
+            .compatibilityBlockedReason(runtimeVersion: runtimeVersion, binding: checkpoint.compatibilityBinding) {
+            throw SessionManagerError.unsupportedOperation(reason)
         }
         guard try store.providerCheckpoint(for: .codex) == checkpoint else {
             throw PersistentStateError.invalidRecord(
@@ -302,6 +305,7 @@ public actor CodexNativeDeleteCoordinator {
             operation: .permanentlyDelete,
             providerInventoryHash: checkpoint.inventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: checkpoint.compatibilityBinding,
             reconciliationTimestamp: checkpoint.refreshedAt,
             createdAt: createdAt,
             expiresAt: expiresAt,
@@ -385,14 +389,17 @@ public actor CodexNativeDeleteCoordinator {
                 "Displayed Permanent Delete Preview differs from its frozen SQLite record."
             )
         }
-        guard let checkpoint = try store.providerCheckpoint(for: .codex),
-              CodexAppServerProvider.supportsVerifiedDeleteContract(
-                  checkpoint.runtimeVersion
-              ) else {
+        guard let checkpoint = try store.providerCheckpoint(for: .codex) else {
             throw PersistentStateError.invalidRecord(
-                "The persisted Codex runtime is outside the audited Permanent Delete allow-list."
+                "The persisted Permanent Delete Preview has no authoritative Codex checkpoint."
             )
         }
+        if let reason = CodexLifecycleMutationKind.permanentDelete
+            .compatibilityBlockedReason(runtimeVersion: checkpoint.runtimeVersion, binding: checkpoint.compatibilityBinding) {
+            throw SessionManagerError.unsupportedOperation(reason)
+        }
+
+        try await executionGate.requireCodexDesktopExited()
 
         let persistentReport = try await authorization.execute(
             previewID: preview.id,
@@ -466,6 +473,8 @@ protocol DeleteExecutionRecoveryReadback: Sendable {
         nativeSessionID: String,
         auditedRuntimeVersion: String
     ) async -> DeleteExactReadObservation
+    func exactReadObservation(nativeSessionID: String, auditedRuntimeVersion: String,
+                  expectedCompatibility: CodexCompatibilityBinding?) async -> DeleteExactReadObservation
 }
 
 actor CodexDeleteExecutionRecoveryReadback: DeleteExecutionRecoveryReadback {
@@ -479,8 +488,13 @@ actor CodexDeleteExecutionRecoveryReadback: DeleteExecutionRecoveryReadback {
         nativeSessionID: String,
         auditedRuntimeVersion: String
     ) async -> DeleteExactReadObservation {
+        await exactReadObservation(nativeSessionID: nativeSessionID, auditedRuntimeVersion: auditedRuntimeVersion, expectedCompatibility: nil)
+    }
+
+    func exactReadObservation(nativeSessionID: String, auditedRuntimeVersion: String,
+                  expectedCompatibility: CodexCompatibilityBinding?) async -> DeleteExactReadObservation {
         do {
-            let snapshot = try await source.exactRead(threadID: nativeSessionID)
+            let snapshot = try await source.exactReadForDeletion(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
             guard snapshot.thread.id == nativeSessionID else {
                 return .unavailable(
                     observedAt: snapshot.observedAt,
@@ -493,17 +507,9 @@ actor CodexDeleteExecutionRecoveryReadback: DeleteExecutionRecoveryReadback {
                 observedAt: snapshot.observedAt,
                 runtimeVersion: snapshot.runtimeVersion
             )
-        } catch let CodexAppServerError.rpcError(code, message)
-            where code == -32600
-                && message == "thread not loaded: \(nativeSessionID)"
-                && CodexAppServerProvider.supportsVerifiedDeleteContract(
-                    auditedRuntimeVersion
-                ) {
-            return .absent(
-                nativeSessionID: nativeSessionID,
-                observedAt: Date(),
-                runtimeVersion: auditedRuntimeVersion
-            )
+        } catch let evidence as CodexDeleteAbsenceEvidence {
+            return .verifiedAbsence(evidence, nativeSessionID: nativeSessionID,
+                                    auditedRuntimeVersion: auditedRuntimeVersion, expectedCompatibility: expectedCompatibility)
         } catch {
             return .unavailable(
                 observedAt: Date(),
@@ -536,13 +542,15 @@ actor DeleteExecutionRecoveryReconciler {
         let context = try loadContext(previewID: previewID)
         let exact = await readback.exactReadObservation(
             nativeSessionID: context.preview.items[0].nativeSessionID,
-            auditedRuntimeVersion: context.runtimeVersion
+            auditedRuntimeVersion: context.runtimeVersion,
+            expectedCompatibility: context.compatibilityBinding
         )
         let evidence = try classify(
             snapshot: snapshot,
             exact: exact,
             preview: context.preview,
-            runtimeVersion: context.runtimeVersion
+            runtimeVersion: context.runtimeVersion,
+            expectedCompatibility: context.compatibilityBinding
         )
         let completedAt = max(context.preview.createdAt, snapshot.observedAt)
         let report = PersistentOperationReport(
@@ -581,7 +589,7 @@ actor DeleteExecutionRecoveryReconciler {
 
     private func loadContext(
         previewID: UUID
-    ) throws -> (preview: PersistentOperationPreview, runtimeVersion: String) {
+    ) throws -> (preview: PersistentOperationPreview, runtimeVersion: String, compatibilityBinding: CodexCompatibilityBinding?) {
         guard let preview = try store.operationPreview(id: previewID),
               preview.status == .executing,
               preview.provider == .codex,
@@ -599,7 +607,7 @@ actor DeleteExecutionRecoveryReconciler {
               checkpoint.inventoryComplete,
               checkpoint.inventoryHash == preview.providerInventoryHash,
               let runtimeVersion = checkpoint.runtimeVersion,
-              CodexAppServerProvider.supportsVerifiedDeleteContract(runtimeVersion) else {
+              CodexLifecycleMutationKind.permanentDelete.supports(runtimeVersion: runtimeVersion, binding: checkpoint.compatibilityBinding) else {
             throw DeleteRecoveryError.checkpointUnavailable(
                 "the original complete claim checkpoint or audited runtime identity changed"
             )
@@ -609,6 +617,7 @@ actor DeleteExecutionRecoveryReconciler {
             operation: preview.operation,
             providerInventoryHash: preview.providerInventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: checkpoint.compatibilityBinding,
             reconciliationTimestamp: checkpoint.refreshedAt,
             createdAt: preview.createdAt,
             expiresAt: preview.expiresAt,
@@ -629,18 +638,20 @@ actor DeleteExecutionRecoveryReconciler {
                 "Manager Trash membership drifted before recovery"
             )
         }
-        return (preview, runtimeVersion)
+        return (preview, runtimeVersion, checkpoint.compatibilityBinding)
     }
 
     private func classify(
         snapshot: ProviderInventorySnapshot,
         exact: DeleteExactReadObservation,
         preview: PersistentOperationPreview,
-        runtimeVersion: String
+        runtimeVersion: String,
+        expectedCompatibility: CodexCompatibilityBinding?
     ) throws -> RecoveryEvidence {
         guard snapshot.provider == .codex,
               snapshot.inventoryComplete,
               snapshot.runtimeVersion == runtimeVersion,
+              snapshot.compatibilityBinding == expectedCompatibility,
               snapshot.observedAt >= preview.createdAt else {
             throw DeleteRecoveryError.evidenceUnavailable(
                 "fresh complete inventory from the original runtime is required"

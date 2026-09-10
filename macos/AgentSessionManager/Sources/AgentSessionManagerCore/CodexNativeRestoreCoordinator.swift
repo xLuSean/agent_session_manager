@@ -201,6 +201,7 @@ public struct NativeRestoreReport: Identifiable, Sendable {
 public actor CodexNativeRestoreCoordinator {
     private let store: SQLiteStateStore
     private let authorization: RestoreAuthorizationCoordinator
+    private let executionGate: any CodexLifecycleExecutionChecking
     private let now: @Sendable () -> Date
     private let makePreviewID: @Sendable () -> UUID
 
@@ -216,6 +217,7 @@ public actor CodexNativeRestoreCoordinator {
             store: store,
             executor: RestoreMutationExecutor(transport: transport)
         )
+        self.executionGate = CodexDesktopLifecycleExecutionGate()
         self.now = { Date() }
         self.makePreviewID = { UUID() }
     }
@@ -223,6 +225,7 @@ public actor CodexNativeRestoreCoordinator {
     init(
         store: SQLiteStateStore,
         transport: any RestoreMutationTransport,
+        executionGate: any CodexLifecycleExecutionChecking,
         now: @escaping @Sendable () -> Date,
         makePreviewID: @escaping @Sendable () -> UUID,
         makeReportID: @escaping @Sendable () -> UUID
@@ -234,6 +237,7 @@ public actor CodexNativeRestoreCoordinator {
             now: now,
             makeReportID: makeReportID
         )
+        self.executionGate = executionGate
         self.now = now
         self.makePreviewID = makePreviewID
     }
@@ -260,13 +264,10 @@ public actor CodexNativeRestoreCoordinator {
                 "Native Restore Preview requires the exact coordinated snapshot checkpoint."
             )
         }
-        guard let runtimeVersion = snapshot.runtimeVersion,
-              CodexAppServerProvider.supportsVerifiedLifecycleContract(
-                  runtimeVersion
-              ) else {
-            throw PersistentStateError.invalidRecord(
-                "The observed Codex runtime is outside the audited native Restore allow-list."
-            )
+        let runtimeVersion = snapshot.runtimeVersion ?? ""
+        if let reason = CodexLifecycleMutationKind.restore
+            .compatibilityBlockedReason(runtimeVersion: runtimeVersion, binding: checkpoint.compatibilityBinding) {
+            throw SessionManagerError.unsupportedOperation(reason)
         }
         guard try store.providerCheckpoint(for: .codex) == checkpoint else {
             throw PersistentStateError.invalidRecord(
@@ -312,6 +313,7 @@ public actor CodexNativeRestoreCoordinator {
             operation: .restore,
             providerInventoryHash: checkpoint.inventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: checkpoint.compatibilityBinding,
             reconciliationTimestamp: checkpoint.refreshedAt,
             createdAt: createdAt,
             expiresAt: expiresAt,
@@ -393,14 +395,17 @@ public actor CodexNativeRestoreCoordinator {
                 "Displayed Restore Preview differs from its frozen SQLite record."
             )
         }
-        guard let checkpoint = try store.providerCheckpoint(for: .codex),
-              CodexAppServerProvider.supportsVerifiedLifecycleContract(
-                  checkpoint.runtimeVersion
-              ) else {
+        guard let checkpoint = try store.providerCheckpoint(for: .codex) else {
             throw PersistentStateError.invalidRecord(
-                "The persisted Codex runtime is outside the audited native Restore allow-list."
+                "The persisted Restore Preview has no authoritative Codex checkpoint."
             )
         }
+        if let reason = CodexLifecycleMutationKind.restore
+            .compatibilityBlockedReason(runtimeVersion: checkpoint.runtimeVersion, binding: checkpoint.compatibilityBinding) {
+            throw SessionManagerError.unsupportedOperation(reason)
+        }
+
+        try await executionGate.requireCodexDesktopExited()
 
         let persistentReport = try await authorization.execute(
             previewID: preview.id,

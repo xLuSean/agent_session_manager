@@ -325,7 +325,7 @@ final class ArchiveMutationExecutorTests: XCTestCase {
     }
 
     func testUnauditedRuntimeStopsBeforeInventoryOrArchive() async throws {
-        let fixture = try makeFixture(session: activeSession(), runtimeVersion: "0.148.0")
+        let fixture = try makeFixture(session: activeSession(), runtimeVersion: "0.150.0")
         let transport = ArchiveTransportStub(
             preflight: fixture.snapshot,
             readback: fixture.snapshot

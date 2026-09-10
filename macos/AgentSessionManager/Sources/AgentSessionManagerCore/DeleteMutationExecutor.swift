@@ -4,15 +4,40 @@ enum DeleteExactReadObservation: Equatable, Sendable {
     case present(nativeSessionID: String, observedAt: Date, runtimeVersion: String?)
     case absent(nativeSessionID: String, observedAt: Date, runtimeVersion: String)
     case unavailable(observedAt: Date, errorCode: String, message: String)
+
+    static func verifiedAbsence(_ evidence: CodexDeleteAbsenceEvidence,
+                               nativeSessionID: String, auditedRuntimeVersion: String,
+                               expectedCompatibility: CodexCompatibilityBinding? = nil) -> Self {
+        guard evidence.nativeSessionID == nativeSessionID,
+              evidence.runtimeVersion == auditedRuntimeVersion,
+              (expectedCompatibility == nil || (expectedCompatibility?.environmentFingerprint == evidence.compatibilityAdmission?.environmentFingerprint
+                && expectedCompatibility?.supports(.permanentDelete, runtimeVersion: auditedRuntimeVersion) == true)),
+              (CodexAppServerProvider.supportsVerifiedDeleteContract(evidence.runtimeVersion)
+                || (evidence.compatibilityAdmission?.feature == .officialDelete
+                    && evidence.compatibilityAdmission?.runtime.version == evidence.runtimeVersion
+                    && evidence.compatibilityAdmission.map {
+                        evidence.observedAt.timeIntervalSince($0.issuedAt) >= 0
+                            && evidence.observedAt.timeIntervalSince($0.issuedAt) <= 60
+                    } == true)) else {
+            return .unavailable(observedAt: evidence.observedAt,
+                errorCode: "delete_exact_read_provenance_mismatch",
+                message: "Exact-ID absence was observed for a different identity or runtime.")
+        }
+        return .absent(nativeSessionID: evidence.nativeSessionID,
+                       observedAt: evidence.observedAt, runtimeVersion: evidence.runtimeVersion)
+    }
 }
 
 protocol DeleteMutationTransport: Sendable {
     func inventorySnapshot() async throws -> ProviderInventorySnapshot
     func delete(nativeSessionID: String) async throws
+    func delete(nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws
     func exactReadObservation(
         nativeSessionID: String,
         auditedRuntimeVersion: String
     ) async -> DeleteExactReadObservation
+    func exactReadObservation(nativeSessionID: String, auditedRuntimeVersion: String,
+                  expectedCompatibility: CodexCompatibilityBinding?) async -> DeleteExactReadObservation
 }
 
 actor CodexDeleteMutationTransport: DeleteMutationTransport {
@@ -27,15 +52,24 @@ actor CodexDeleteMutationTransport: DeleteMutationTransport {
     }
 
     func delete(nativeSessionID: String) async throws {
-        try await source.delete(threadID: nativeSessionID)
+        try await delete(nativeSessionID: nativeSessionID, expectedCompatibility: nil)
+    }
+
+    func delete(nativeSessionID: String, expectedCompatibility: CodexCompatibilityBinding?) async throws {
+        try await source.delete(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
     }
 
     func exactReadObservation(
         nativeSessionID: String,
         auditedRuntimeVersion: String
     ) async -> DeleteExactReadObservation {
+        await exactReadObservation(nativeSessionID: nativeSessionID, auditedRuntimeVersion: auditedRuntimeVersion, expectedCompatibility: nil)
+    }
+
+    func exactReadObservation(nativeSessionID: String, auditedRuntimeVersion: String,
+                  expectedCompatibility: CodexCompatibilityBinding?) async -> DeleteExactReadObservation {
         do {
-            let snapshot = try await source.exactRead(threadID: nativeSessionID)
+            let snapshot = try await source.exactReadForDeletion(threadID: nativeSessionID, expectedCompatibility: expectedCompatibility)
             guard snapshot.thread.id == nativeSessionID else {
                 return .unavailable(
                     observedAt: snapshot.observedAt,
@@ -48,21 +82,9 @@ actor CodexDeleteMutationTransport: DeleteMutationTransport {
                 observedAt: snapshot.observedAt,
                 runtimeVersion: snapshot.runtimeVersion
             )
-        } catch let CodexAppServerError.rpcError(code, message)
-            where code == -32600
-                && message == "thread not loaded: \(nativeSessionID)"
-                && CodexAppServerProvider.supportsVerifiedDeleteContract(
-                    auditedRuntimeVersion
-                ) {
-            // The 0.147.0 Delete contract is deliberately narrow: this exact
-            // discriminator is accepted only together with a complete fresh
-            // inventory that also omits the same ID. Generic RPC errors never
-            // prove absence.
-            return .absent(
-                nativeSessionID: nativeSessionID,
-                observedAt: Date(),
-                runtimeVersion: auditedRuntimeVersion
-            )
+        } catch let evidence as CodexDeleteAbsenceEvidence {
+            return .verifiedAbsence(evidence, nativeSessionID: nativeSessionID,
+                                    auditedRuntimeVersion: auditedRuntimeVersion, expectedCompatibility: expectedCompatibility)
         } catch {
             return .unavailable(
                 observedAt: Date(),
@@ -168,7 +190,7 @@ actor DeleteMutationExecutor {
 
         var acknowledgementError: Error?
         do {
-            try await transport.delete(nativeSessionID: item.nativeSessionID)
+            try await transport.delete(nativeSessionID: item.nativeSessionID, expectedCompatibility: checkpoint.compatibilityBinding)
         } catch {
             acknowledgementError = error
         }
@@ -177,7 +199,8 @@ actor DeleteMutationExecutor {
         let runtimeVersion = checkpoint.runtimeVersion ?? ""
         async let exactObservation = transport.exactReadObservation(
             nativeSessionID: item.nativeSessionID,
-            auditedRuntimeVersion: runtimeVersion
+            auditedRuntimeVersion: runtimeVersion,
+            expectedCompatibility: checkpoint.compatibilityBinding
         )
         do {
             let inventory = try await transport.inventorySnapshot()
@@ -240,7 +263,7 @@ actor DeleteMutationExecutor {
         }
         guard preview.providerInventoryHash == checkpoint.inventoryHash,
               let runtimeVersion = checkpoint.runtimeVersion,
-              CodexAppServerProvider.supportsVerifiedDeleteContract(runtimeVersion) else {
+              CodexLifecycleMutationKind.permanentDelete.supports(runtimeVersion: runtimeVersion, binding: checkpoint.compatibilityBinding) else {
             throw DeleteExecutionError.checkpointMismatch(
                 "Preview inventory or audited Delete runtime binding is unavailable"
             )
@@ -250,6 +273,7 @@ actor DeleteMutationExecutor {
             operation: preview.operation,
             providerInventoryHash: preview.providerInventoryHash,
             runtimeVersion: runtimeVersion,
+            compatibilityBinding: checkpoint.compatibilityBinding,
             reconciliationTimestamp: checkpoint.refreshedAt,
             createdAt: preview.createdAt,
             expiresAt: preview.expiresAt,
@@ -275,6 +299,7 @@ actor DeleteMutationExecutor {
             )
         }
         guard snapshot.runtimeVersion == checkpoint.runtimeVersion,
+              snapshot.compatibilityBinding == checkpoint.compatibilityBinding,
               snapshot.observedAt >= checkpoint.refreshedAt else {
             throw DeleteExecutionError.stateDrift(
                 "runtime changed or preflight predates the frozen checkpoint"
@@ -311,6 +336,7 @@ actor DeleteMutationExecutor {
         guard inventory.provider == .codex,
               inventory.inventoryComplete,
               inventory.runtimeVersion == checkpoint.runtimeVersion,
+              inventory.compatibilityBinding == checkpoint.compatibilityBinding,
               inventory.observedAt >= readbackNotBefore else {
             return unknownResult(
                 preview: preview,

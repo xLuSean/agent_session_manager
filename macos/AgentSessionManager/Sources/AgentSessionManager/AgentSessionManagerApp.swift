@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -24,6 +25,18 @@ struct AgentSessionManagerApp: App {
         .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Agent Session Manager") {
+                    let info = Bundle.main.infoDictionary ?? [:]
+                    let marketing = info["CFBundleShortVersionString"] as? String ?? "Development"
+                    let suffix = info["ASMReleaseSuffix"] as? String ?? ""
+                    let release = marketing + (suffix.isEmpty ? "" : "-" + suffix)
+                    NSApp.orderFrontStandardAboutPanel(options: [
+                        .applicationVersion: release,
+                        .version: info["CFBundleVersion"] as? String ?? ""
+                    ])
+                }
+            }
             CommandGroup(after: .newItem) {
                 Button("Refresh Sessions") {
                     Task { await model.reload() }

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A100000000000000000000A6 /* NativeDeleteReportSheetLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B6 /* NativeDeleteReportSheetLayout.swift */; };
+		A20000000000000000000004 /* NativeDeleteReportSheetLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B6 /* NativeDeleteReportSheetLayout.swift */; };
 		A10000000000000000000001 /* AgentSessionManagerCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* AgentSessionManagerCore */; };
 		A10000000000000000000011 /* AgentSessionManagerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000021 /* AgentSessionManagerApp.swift */; };
 		A10000000000000000000012 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000022 /* ContentView.swift */; };
@@ -18,18 +20,22 @@
 		A10000000000000000000018 /* ConflictResolutionPreviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000028 /* ConflictResolutionPreviewSheet.swift */; };
 		A10000000000000000000019 /* ReportHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000029 /* ReportHistoryView.swift */; };
 		A1000000000000000000001A /* MaintenanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002A /* MaintenanceView.swift */; };
-		A1000000000000000000001B /* ArchiveReadinessSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002B /* ArchiveReadinessSheet.swift */; };
 		A1000000000000000000001C /* NativeArchiveSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002C /* NativeArchiveSheets.swift */; };
 		A1000000000000000000001D /* NativeRestoreSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002D /* NativeRestoreSheets.swift */; };
 		A1000000000000000000001E /* PersistentMainSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002E /* PersistentMainSplitView.swift */; };
 		A1000000000000000000001F /* NativeDeleteSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000002F /* NativeDeleteSheets.swift */; };
 		A100000000000000000000A1 /* PasteboardCopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B1 /* PasteboardCopyButton.swift */; };
 		A100000000000000000000A2 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2 /* SettingsView.swift */; };
+		A100000000000000000000A3 /* SnapshotStorageCleanupSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B3 /* SnapshotStorageCleanupSheet.swift */; };
+		A100000000000000000000A5 /* GhostRepairBulkInventorySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B5 /* GhostRepairBulkInventorySheet.swift */; };
 		A20000000000000000000001 /* SessionManagerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* SessionManagerModel.swift */; };
 		A20000000000000000000002 /* AgentSessionManagerCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* AgentSessionManagerCore */; };
+		A20000000000000000000003 /* BulkShippingCompositionTestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* BulkShippingCompositionTestFixture.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A100000000000000000000C1 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Version.xcconfig; sourceTree = "<group>"; };
+		A100000000000000000000B6 /* NativeDeleteReportSheetLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/NativeDeleteReportSheetLayout.swift; sourceTree = "<group>"; };
 		A10000000000000000000021 /* AgentSessionManagerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/AgentSessionManagerApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000022 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/ContentView.swift; sourceTree = "<group>"; };
 		A10000000000000000000023 /* SessionManagerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/SessionManagerModel.swift; sourceTree = "<group>"; };
@@ -40,15 +46,17 @@
 		A10000000000000000000028 /* ConflictResolutionPreviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/ConflictResolutionPreviewSheet.swift; sourceTree = "<group>"; };
 		A10000000000000000000029 /* ReportHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/ReportHistoryView.swift; sourceTree = "<group>"; };
 		A1000000000000000000002A /* MaintenanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/MaintenanceView.swift; sourceTree = "<group>"; };
-		A1000000000000000000002B /* ArchiveReadinessSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/ArchiveReadinessSheet.swift; sourceTree = "<group>"; };
 		A1000000000000000000002C /* NativeArchiveSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/NativeArchiveSheets.swift; sourceTree = "<group>"; };
 		A1000000000000000000002D /* NativeRestoreSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/NativeRestoreSheets.swift; sourceTree = "<group>"; };
 		A1000000000000000000002E /* PersistentMainSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/PersistentMainSplitView.swift; sourceTree = "<group>"; };
 		A1000000000000000000002F /* NativeDeleteSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/NativeDeleteSheets.swift; sourceTree = "<group>"; };
 		A100000000000000000000B1 /* PasteboardCopyButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/PasteboardCopyButton.swift; sourceTree = "<group>"; };
 		A100000000000000000000B2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/SettingsView.swift; sourceTree = "<group>"; };
+		A100000000000000000000B3 /* SnapshotStorageCleanupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/SnapshotStorageCleanupSheet.swift; sourceTree = "<group>"; };
+		A100000000000000000000B5 /* GhostRepairBulkInventorySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Sources/AgentSessionManager/GhostRepairBulkInventorySheet.swift; sourceTree = "<group>"; };
 		A10000000000000000000031 /* AgentSessionManager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentSessionManager.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000012 /* AgentSessionManagerAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentSessionManagerAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000013 /* BulkShippingCompositionTestFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Tests/AgentSessionManagerCoreTests/Support/BulkShippingCompositionTestFixture.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -87,8 +95,10 @@
 		A10000000000000000000050 = {
 			isa = PBXGroup;
 			children = (
+				A100000000000000000000C1 /* Version.xcconfig */,
 				A10000000000000000000032 /* AgentSessionManager */,
 				A20000000000000000000032 /* AgentSessionManagerAppTests */,
+				A20000000000000000000013 /* BulkShippingCompositionTestFixture.swift */,
 				A10000000000000000000021 /* AgentSessionManagerApp.swift */,
 				A10000000000000000000022 /* ContentView.swift */,
 				A10000000000000000000023 /* SessionManagerModel.swift */,
@@ -99,13 +109,15 @@
 				A10000000000000000000028 /* ConflictResolutionPreviewSheet.swift */,
 				A10000000000000000000029 /* ReportHistoryView.swift */,
 				A1000000000000000000002A /* MaintenanceView.swift */,
-				A1000000000000000000002B /* ArchiveReadinessSheet.swift */,
 				A1000000000000000000002C /* NativeArchiveSheets.swift */,
 				A1000000000000000000002D /* NativeRestoreSheets.swift */,
 				A1000000000000000000002E /* PersistentMainSplitView.swift */,
 				A1000000000000000000002F /* NativeDeleteSheets.swift */,
+				A100000000000000000000B6 /* NativeDeleteReportSheetLayout.swift */,
 				A100000000000000000000B1 /* PasteboardCopyButton.swift */,
 				A100000000000000000000B2 /* SettingsView.swift */,
+				A100000000000000000000B3 /* SnapshotStorageCleanupSheet.swift */,
+				A100000000000000000000B5 /* GhostRepairBulkInventorySheet.swift */,
 				A10000000000000000000051 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -241,13 +253,15 @@
 				A10000000000000000000018 /* ConflictResolutionPreviewSheet.swift in Sources */,
 				A10000000000000000000019 /* ReportHistoryView.swift in Sources */,
 				A1000000000000000000001A /* MaintenanceView.swift in Sources */,
-				A1000000000000000000001B /* ArchiveReadinessSheet.swift in Sources */,
 				A1000000000000000000001C /* NativeArchiveSheets.swift in Sources */,
 				A1000000000000000000001D /* NativeRestoreSheets.swift in Sources */,
 				A1000000000000000000001E /* PersistentMainSplitView.swift in Sources */,
 				A1000000000000000000001F /* NativeDeleteSheets.swift in Sources */,
+				A100000000000000000000A6 /* NativeDeleteReportSheetLayout.swift in Sources */,
 				A100000000000000000000A1 /* PasteboardCopyButton.swift in Sources */,
 				A100000000000000000000A2 /* SettingsView.swift in Sources */,
+				A100000000000000000000A3 /* SnapshotStorageCleanupSheet.swift in Sources */,
+				A100000000000000000000A5 /* GhostRepairBulkInventorySheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -256,6 +270,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A20000000000000000000001 /* SessionManagerModel.swift in Sources */,
+				A20000000000000000000004 /* NativeDeleteReportSheetLayout.swift in Sources */,
+				A20000000000000000000003 /* BulkShippingCompositionTestFixture.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -303,6 +319,7 @@
 		};
 		A10000000000000000000082 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A100000000000000000000C1 /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -310,17 +327,16 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 7;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Agent Session Manager";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sean.AgentSessionManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -330,6 +346,7 @@
 		};
 		A10000000000000000000083 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A100000000000000000000C1 /* Version.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -337,17 +354,17 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 7;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Agent Session Manager";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.sean.AgentSessionManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
