@@ -88,29 +88,36 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
     }
 
     public func reviewSavedCompatibility(_ request: CodexCompatibilityRequest) throws -> CodexCompatibilityReview {
-        let state = try environment(request)
+        let state = try installation(request)
         let reports = try savedReports()
-        if let report = reports.first(where: { $0.environmentFingerprint == state.fingerprint }) {
-            return .init(report: report, isCurrent: true, environmentFingerprint: state.fingerprint,
+        if let report = reports.first(where: { $0.installation == state }) {
+            return .init(report: report, isCurrent: true, environmentFingerprint: report.environmentFingerprint,
                          providerVersion: report.provider.version, desktopVersion: report.desktop?.version)
         }
-        // Only changed/unknown executables need --version. No schema generation
-        // and no session operations run during a startup comparison.
+        // A changed installation needs a Settings check, not a background audit.
+        // --version is small; do not hash binaries or inspect databases here.
         let work = try makeWorkDirectory()
         defer { _ = try? FileManager.default.trashItem(at: work, resultingItemURL: nil) }
-        func knownVersion(_ url: URL, sha: String?) -> String? {
-            guard let sha else { return nil }
-            let saved = reports.flatMap { [$0.provider] + ($0.desktop.map { [$0] } ?? []) }
-                .first { $0.path == url.path && $0.sha256 == sha }?.version
-            return saved ?? (try? runtime(url, work: work).version)
-        }
-        let providerVersion = knownVersion(request.providerExecutable, sha: state.providerSHA)
-        let desktopVersion = state.desktopURL.flatMap { knownVersion($0, sha: state.desktopSHA) }
-        let after = try environment(request)
-        try requireSameEnvironment(state, after)
+        let data = try? command(request.providerExecutable, arguments: ["--version"], work: work)
+        let providerVersion = data.flatMap { CodexAppServerProvider.runtimeVersion(fromVersionOutput: String(decoding: $0, as: UTF8.self)) }
+        let desktopRuntime = state.desktop?.files.first { $0.requestedPath.hasSuffix("/Contents/Resources/codex") }
+        let desktopData = desktopRuntime.flatMap { try? command(URL(fileURLWithPath: $0.requestedPath), arguments: ["--version"], work: work) }
+        let desktopVersion = desktopData.flatMap { CodexAppServerProvider.runtimeVersion(fromVersionOutput: String(decoding: $0, as: UTF8.self)) }
+        guard try installation(request) == state else { throw CheckError.changed }
         return .init(report: reports.first, isCurrent: false, environmentFingerprint: state.fingerprint,
-                     providerVersion: providerVersion, desktopVersion: desktopVersion,
-                     metadataUnavailable: state.databaseChecks.contains { $0.issue == .unavailable })
+                     providerVersion: providerVersion, desktopVersion: desktopVersion)
+    }
+
+    private func installation(_ request: CodexCompatibilityRequest) throws -> CodexCompatibilityInstallation {
+        try .read(request, desktopCandidates: desktopCandidates ?? Self.installedDesktopCandidates())
+    }
+
+    private func matchingReport(_ request: CodexCompatibilityRequest) throws -> CodexCompatibilityReport {
+        let current = try installation(request)
+        guard let report = try savedReports().first(where: { $0.installation == current }) else {
+            throw CheckError.admissionRequired
+        }
+        return report
     }
 
     private func makeWorkDirectory() throws -> URL {
@@ -123,19 +130,19 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
 
     public func isCurrent(_ report: CodexCompatibilityReport, request: CodexCompatibilityRequest) -> Bool {
         guard report.revision == CodexCompatibilityReport.policyRevision else { return false }
-        return (try? environment(request).fingerprint) == report.environmentFingerprint
+        guard let saved = report.installation else { return false }
+        return (try? installation(request)) == saved
     }
 
-    /// Reads cached observations and fresh executable/database metadata only.
+    /// Reads cached results and cheap installation metadata only.
     /// It never runs behavioral tests, invokes lifecycle APIs or changes a report.
     func lifecycleAdmission(_ request: CodexCompatibilityRequest, runtimeVersion: String,
                             feature: CodexCompatibilityFeature) throws -> CodexCompatibilityAdmission {
-        let before = try environment(request)
-        guard let report = try savedReports().first(where: { $0.environmentFingerprint == before.fingerprint }),
-              report.provider.sha256 == before.providerSHA,
+        let report = try matchingReport(request)
+        guard
               let admission = CodexCompatibilityAdmission.evaluate(report: report, request: request,
-                currentFingerprint: before.fingerprint, runtimeVersion: runtimeVersion, feature: feature),
-              try environment(request).fingerprint == before.fingerprint else { throw CheckError.admissionRequired }
+                currentFingerprint: report.environmentFingerprint, runtimeVersion: runtimeVersion, feature: feature)
+        else { throw CheckError.admissionRequired }
         return admission
     }
 
@@ -143,11 +150,11 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
     /// It is not enough to send a mutation; lifecycleAdmission must follow.
     func hasLifecycleCandidate(executable: URL, runtimeVersion: String,
                                feature: CodexCompatibilityFeature) throws -> Bool {
-        let sha = try digest(executable)
+        let stamp = try CodexCompatibilityInstallation.FileStamp.read(executable)
         return try savedReports().contains { report in
-            let matches = report.behavior?.results.filter { $0.feature == feature } ?? []
             return report.provider.path == executable.path && report.provider.version == runtimeVersion
-                && report.provider.sha256 == sha && matches.count == 1 && matches[0].status == .passed
+                && report.installation?.provider == stamp
+                && report.permitsSavedLifecycleFeature(feature)
         }
     }
 
@@ -162,21 +169,19 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
     }
 
     func lifecycleBinding(_ request: CodexCompatibilityRequest, runtimeVersion: String) throws -> CodexCompatibilityBinding? {
-        let before = try environment(request)
-        guard let report = try savedReports().first(where: { $0.environmentFingerprint == before.fingerprint }),
-              report.provider.sha256 == before.providerSHA else { return nil }
-        // Assess both features against one observation, then verify it once more.
+        guard let report = try? matchingReport(request) else { return nil }
         let passed = [CodexCompatibilityFeature.archiveRestore, .officialDelete].filter {
             CodexCompatibilityAdmission.evaluate(report: report, request: request,
-                currentFingerprint: before.fingerprint, runtimeVersion: runtimeVersion, feature: $0) != nil
+                currentFingerprint: report.environmentFingerprint, runtimeVersion: runtimeVersion, feature: $0) != nil
         }
-        guard !passed.isEmpty, try environment(request).fingerprint == before.fingerprint else { return nil }
+        guard !passed.isEmpty else { return nil }
         return .init(revision: 1, runtimeVersion: runtimeVersion,
-            environmentFingerprint: before.fingerprint, features: passed)
+            environmentFingerprint: report.environmentFingerprint, features: passed)
     }
 
     public func inspect(_ request: CodexCompatibilityRequest) throws -> CodexCompatibilityReport {
         try Task.checkCancellation()
+        let installedBefore = try installation(request)
         let before = try environment(request)
         let work = try makeWorkDirectory()
         // Temporary schemas contain no user sessions. Retain the exact folder
@@ -190,6 +195,7 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
         let after = try environment(request)
         try Task.checkCancellation()
         try requireSameEnvironment(before, after)
+        guard try installation(request) == installedBefore else { throw CheckError.changed }
         var report = CodexCompatibilityReport(
             revision: CodexCompatibilityReport.policyRevision, checkedAt: Date(),
             provider: provider, desktop: desktop, environmentFingerprint: after.fingerprint,
@@ -207,6 +213,7 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
         report.databaseChecks = after.databaseChecks
         report.desktopApplication = after.desktopApplication
         report.diagnosticRunID = request.diagnosticRunID
+        report.installation = installedBefore
         report.behavior = try? savedReports().first { $0.environmentFingerprint == after.fingerprint }?.behavior
         try saveInspection(report)
         record(request, message: "Compatibility interfaces inspected", metadata: [
@@ -222,6 +229,7 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
 
     public func verifyBehavior(_ request: CodexCompatibilityRequest, confirmedFingerprint: String,
                                progress: @escaping @Sendable (String) async -> Void) async throws -> CodexCompatibilityReport {
+        let installedBefore = try installation(request)
         let before = try environment(request)
         guard before.fingerprint == confirmedFingerprint,
               var report = try savedReports().first(where: { $0.environmentFingerprint == confirmedFingerprint }) else {
@@ -277,6 +285,8 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
         report.behavior = .init(revision: CodexCompatibilityBehaviorReport.policyRevision,
                                 checkedAt: Date(), results: results)
         report.diagnosticRunID = request.diagnosticRunID
+        guard try installation(request) == installedBefore else { throw CheckError.changed }
+        report.installation = installedBefore
         try saveInspection(report)
         return report
     }
@@ -416,10 +426,14 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
         let input = try FileHandle(forReadingFrom: url)
         defer { try? input.close() }
         var hash = SHA256()
-        while let data = try input.read(upToCount: 1_048_576), !data.isEmpty {
+        // FileHandle's autoreleased NSData can otherwise retain every chunk
+        // for the duration of a long-running Swift concurrency job.
+        while try autoreleasepool(invoking: { () throws -> Bool in
             try Task.checkCancellation()
+            guard let data = try input.read(upToCount: 1_048_576), !data.isEmpty else { return false }
             hash.update(data: data)
-        }
+            return true
+        }) {}
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 

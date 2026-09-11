@@ -17,6 +17,11 @@ struct SessionTableView: View {
                 if model.isCalculatingSessionFileSizes {
                     ProgressView().controlSize(.small)
                     Text("Updating conversation sizes…").font(.caption).foregroundStyle(.secondary)
+                } else if model.unavailableConversationSizeCount > 0 {
+                    Text("\(model.unavailableConversationSizeCount) sizes unavailable")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("Hover over a — in the Size column for the reason. Unmeasured sessions appear after measured sizes, not as zero.")
                 }
                 Spacer()
                 Picker("Sort", selection: $model.sessionListSort) {
@@ -60,13 +65,14 @@ struct SessionTableView: View {
                 }
                 .width(min: 100, ideal: 110)
 
-                TableColumn("Conversation Size") { session in
+                TableColumn("Size") { session in
                     Text(model.conversationFileSizeLabel(for: session))
                         .monospacedDigit()
                         .frame(maxWidth: .infinity, alignment: .trailing)
-                        .help(model.conversationFileSizeHelp)
+                        .help(model.conversationFileSizeHelp(for: session))
+                        .accessibilityHint(model.conversationFileSizeHelp(for: session))
                 }
-                .width(min: 125, ideal: 135)
+                .width(min: 70, ideal: 85, max: 110)
 
                 TableColumn("Updated") { session in
                     Text(session.updatedAt, format: .relative(presentation: .named))
@@ -649,15 +655,20 @@ private final class TableColumnWidthProbe: NSView {
         guard let desiredWidths,
               desiredWidths.count == expectedColumnCount,
               table.tableColumns.count == expectedColumnCount else { return }
-        let alreadyRestored = zip(table.tableColumns, desiredWidths).allSatisfy {
+        // Compare against attainable widths so a previously wider Size column
+        // does not trigger another restore on every layout pass.
+        let targetWidths = zip(table.tableColumns, desiredWidths).map { column, width in
+            let maximum = column.maxWidth > 0 ? column.maxWidth : .greatestFiniteMagnitude
+            return min(max(width, column.minWidth), maximum)
+        }
+        let alreadyRestored = zip(table.tableColumns, targetWidths).allSatisfy {
             abs($0.width - $1) < 0.5
         }
         guard !alreadyRestored else { return }
 
         isApplyingWidths = true
-        for (column, width) in zip(table.tableColumns, desiredWidths) {
-            let maximum = column.maxWidth > 0 ? column.maxWidth : .greatestFiniteMagnitude
-            column.width = min(max(width, column.minWidth), maximum)
+        for (column, width) in zip(table.tableColumns, targetWidths) {
+            column.width = width
         }
         DispatchQueue.main.async { [weak self] in
             self?.isApplyingWidths = false

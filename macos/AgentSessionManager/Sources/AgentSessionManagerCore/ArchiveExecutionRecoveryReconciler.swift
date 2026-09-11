@@ -77,6 +77,9 @@ actor ArchiveExecutionRecoveryReconciler {
         context: (preview: PersistentOperationPreview, runtimeVersion: String, compatibilityBinding: CodexCompatibilityBinding?),
         snapshot: ProviderInventorySnapshot
     ) throws -> PersistentOperationReport {
+        if context.compatibilityBinding != nil && snapshot.compatibilityBinding == nil {
+            throw CodexCompatibilityInspector.CheckError.admissionRequired
+        }
         let evidence = try classify(
             snapshot: snapshot,
             preview: context.preview,

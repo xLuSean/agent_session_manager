@@ -3,6 +3,31 @@ import Foundation
 import OSLog
 import SwiftUI
 
+struct NativeDeleteSubmissionFailure: Equatable {
+    let title: String
+    let message: String
+    let canRetry: Bool
+    var reviewCleanup = false
+
+    static let cleanupRequired = Self(
+        title: "Previous cleanup needs attention",
+        message: "No new Delete request was sent. Review the previous Desktop cleanup before starting another Delete. Closing Codex alone will not resolve this blocker.",
+        canRetry: false,
+        reviewCleanup: true
+    )
+
+    static func stopped(message: String, unusedPreviewExpiresAt: Date?, now: Date = Date()) -> Self {
+        let canRetry = unusedPreviewExpiresAt.map { $0 > now } ?? false
+        return Self(
+            title: canRetry ? "Deletion has not started" : "Deletion stopped — review required",
+            message: message + (canRetry
+                ? "\nNo Delete request was sent. Resolve the issue above, then choose Check Again and Delete."
+                : "\nClose this preview and review the operation history before trying another deletion."),
+            canRetry: canRetry
+        )
+    }
+}
+
 struct TrustFolderSummary: Identifiable, Hashable {
     let path: String
     let state: FolderTrustState
@@ -475,6 +500,7 @@ final class SessionManagerModel: ObservableObject {
     @Published var sessionRows: [SessionPresentation] = []
     @Published var sessionListSort: SessionListSort = .updated
     @Published private(set) var sessionFileSizes: [String: Int64] = [:]
+    @Published private(set) var sessionFileSizeIssues: [String: SessionFileSizeIssue] = [:]
     @Published private(set) var isCalculatingSessionFileSizes = false
     @Published private(set) var compatibilityReport: CodexCompatibilityReport?
     @Published private(set) var isCheckingCompatibility = false
@@ -704,6 +730,10 @@ final class SessionManagerModel: ObservableObject {
     private var executingNativeArchivePreviewID: UUID?
     private var executingNativeRestorePreviewID: UUID?
     private var executingNativeDeletePreviewID: UUID?
+    @Published private(set) var nativeDeleteSubmissionProgress: String?
+    @Published private(set) var nativeDeleteSpaceSummary: DeletedConversationSpaceSummary?
+    private(set) var nativeDeleteSpaceReportID: UUID?
+    private var shouldReviewCleanupAfterDeletePreview = false
     private var executingOperationPreviewID: UUID?
     private var executingConflictResolutionPreviewID: UUID?
     private var queuedOperationReport: OperationReport?
@@ -1071,7 +1101,22 @@ final class SessionManagerModel: ObservableObject {
     }
 
     var conversationFileSizeHelp: String {
-        "Current logical size of all matching conversation files in sessions and archived_sessions, including old files. Excludes projects, shared databases and ASM backups/reports; not space guaranteed to be freed. Cached until refresh. — means not calculated or unavailable."
+        "Current logical size of conversation files in sessions and archived_sessions, including old files. Multi-ID filenames are matched using bounded session metadata reads. Excludes projects, shared databases and ASM backups/reports; not space guaranteed to be freed. Cached until refresh."
+    }
+
+    func conversationFileSizeHelp(for session: SessionPresentation) -> String {
+        if let issue = sessionFileSizeIssues[session.nativeID] {
+            return issue.explanation + " Unavailable does not mean zero. " + conversationFileSizeHelp
+        }
+        if conversationFileSize(for: session) == nil {
+            return (isCalculatingSessionFileSizes ? "Calculating conversation size… " : "Conversation size has not been measured. ")
+                + conversationFileSizeHelp
+        }
+        return conversationFileSizeHelp
+    }
+
+    var unavailableConversationSizeCount: Int {
+        filteredSessions.filter { $0.system == .codex && sessionFileSizeIssues[$0.nativeID] != nil }.count
     }
 
     @discardableResult
@@ -1079,21 +1124,28 @@ final class SessionManagerModel: ObservableObject {
         sessionFileSizeTask?.cancel()
         let requestID = UUID()
         sessionFileSizeRequestID = requestID
-        if homeURL != sessionFileSizeHomeURL { sessionFileSizes = [:] }
+        if homeURL != sessionFileSizeHomeURL {
+            sessionFileSizes = [:]
+            sessionFileSizeIssues = [:]
+        }
         sessionFileSizeHomeURL = homeURL
         guard let homeURL else {
+            sessionFileSizeIssues = Dictionary(uniqueKeysWithValues:
+                Set(sessionRows.filter { $0.system == .codex }.map(\.nativeID)).map { ($0, .homeUnavailable) })
             isCalculatingSessionFileSizes = false
             return nil
         }
         let ids = Set(sessionRows.filter { $0.system == .codex }.map(\.nativeID))
         sessionFileSizes = sessionFileSizes.filter { ids.contains($0.key) }
+        sessionFileSizeIssues = sessionFileSizeIssues.filter { ids.contains($0.key) }
         isCalculatingSessionFileSizes = true
         let reader = sessionFileSizeReader
         sessionFileSizeTask = Task(priority: .utility) { [weak self] in
-            let sizes = await reader.sizes(homeURL: homeURL, sessionIDs: ids)
+            let inspection = await reader.inspect(homeURL: homeURL, sessionIDs: ids)
             guard !Task.isCancelled, let self,
                   self.sessionFileSizeRequestID == requestID else { return }
-            self.sessionFileSizes = sizes
+            self.sessionFileSizeIssues = inspection.issues
+            self.sessionFileSizes = inspection.sizes
             self.isCalculatingSessionFileSizes = false
         }
         return sessionFileSizeTask
@@ -7435,7 +7487,7 @@ final class SessionManagerModel: ObservableObject {
             return (review.environmentFingerprint,
                     hasPrevious ? "Codex changed — compatibility needs checking" : "Check this Codex installation",
                     versions + (hasPrevious
-                        ? " The version, executable or database structure differs from the saved result."
+                        ? " The installation version, build, location or file metadata changed, or the saved result needs a one-time upgrade. Open Settings → Compatibility to check it."
                         : " There is no saved check for this environment.")
                     + " Browsing remains available when readable; unverified operations stay protected.")
         }
@@ -7971,17 +8023,34 @@ final class SessionManagerModel: ObservableObject {
         }
     }
 
+    func queueCleanupReviewAfterDeletePreview() {
+        shouldReviewCleanupAfterDeletePreview = true
+    }
+
+    func presentCleanupAfterDeletePreview() {
+        guard shouldReviewCleanupAfterDeletePreview else { return }
+        shouldReviewCleanupAfterDeletePreview = false
+        presentGhostRepairBulkInventory()
+    }
+
+    @discardableResult
     func executeNativeDelete(
         _ preview: OperationPreview,
         confirmationToken: String
-    ) async {
-        guard executingNativeDeletePreviewID == nil else { return }
+    ) async -> NativeDeleteSubmissionFailure? {
+        guard executingNativeDeletePreviewID == nil else {
+            return .init(title: "Deletion is already running",
+                         message: "Wait for the current operation to finish. No additional Delete request was sent.",
+                         canRetry: false)
+        }
         guard case .idle = nativeDeleteDesktopCleanupState,
               ghostRepairBulkWorkflowMutationBlockedReason == nil,
               !isGhostRepairBulkPreparationInFlight,
               ghostRepairCleanupState == .idle else {
-            errorMessage = "Finish or resolve the previous Desktop cleanup before starting another Delete. No new Delete request was sent."
-            return
+            logDiagnostic(level: .warning, category: .lifecycle,
+                          message: "Delete blocked by previous Desktop cleanup",
+                          metadata: ["preview_id": preview.id.uuidString])
+            return .cleanupRequired
         }
         logDiagnostic(
             level: .info,
@@ -7994,9 +8063,11 @@ final class SessionManagerModel: ObservableObject {
             ]
         )
         executingNativeDeletePreviewID = preview.id
+        nativeDeleteSubmissionProgress = "Measuring selected conversation files…"
         defer {
             if executingNativeDeletePreviewID == preview.id {
                 executingNativeDeletePreviewID = nil
+                nativeDeleteSubmissionProgress = nil
             }
         }
         do {
@@ -8005,6 +8076,17 @@ final class SessionManagerModel: ObservableObject {
                     "Permanent Delete execution is unavailable."
                 )
             }
+            // One metadata scan for the whole selection, never transcript reads
+            // or a per-session compatibility scan. Unavailable sizes do not block Delete.
+            let sizeHome = sessionFileSizeHomeURL
+            let beforeSizes: [String: Int64]
+            if let sizeHome {
+                beforeSizes = await sessionFileSizeReader.sizes(
+                    homeURL: sizeHome, sessionIDs: Set(preview.items.map(\.nativeID)))
+            } else {
+                beforeSizes = [:]
+            }
+            nativeDeleteSubmissionProgress = "Checking requirements, then processing permanent deletion…"
             if preview.items.count > 1 {
                 guard let batchCoordinator = liveNativeBatchCoordinator else {
                     throw SessionManagerError.unsupportedOperation(
@@ -8036,17 +8118,20 @@ final class SessionManagerModel: ObservableObject {
                 latestNativeDeleteReport = report
             }
             if let report = latestNativeDeleteReport {
+                nativeDeleteSubmissionProgress = "Checking and cleaning Desktop residue for deleted sessions…"
                 await continueFreshNativeDeleteCleanup(
                     report: report,
                     confirmedPreviewID: preview.id,
                     confirmedNativeSessionIDs: preview.items.map(\.nativeID)
                 )
+                nativeDeleteSubmissionProgress = "Measuring removed conversation files…"
+                await measureNativeDeleteSpace(report: report, homeURL: sizeHome, before: beforeSizes)
             }
             pendingNativeDeletePreview = nil
             selection.removeAll()
             await reload()
+            return nil
         } catch {
-            errorMessage = error.localizedDescription
             logDiagnostic(
                 level: .error,
                 category: .lifecycle,
@@ -8057,7 +8142,33 @@ final class SessionManagerModel: ObservableObject {
                     "error": error.localizedDescription,
                 ]
             )
+            // Only an unclaimed, unexpired persisted preview proves that retry
+            // cannot resend a Delete. Missing/uncertain evidence stays blocked.
+            let persisted = try? liveStateStore?.operationPreview(id: preview.id)
+            return .stopped(
+                message: error.localizedDescription,
+                unusedPreviewExpiresAt: persisted?.status == .prepared ? persisted?.expiresAt : nil
+            )
         }
+    }
+
+    func measureNativeDeleteSpace(report: NativeDeleteReport, homeURL: URL?, before: [String: Int64]) async {
+        guard !report.recoveredAfterInterruption else { return }
+        let deletedIDs = Set(report.items.filter {
+            $0.outcome == .success && $0.observedNativeState == .absent
+        }.map(\.nativeSessionID))
+        let after: [String: Int64]
+        if let homeURL, !deletedIDs.isEmpty {
+            after = await sessionFileSizeReader.sizes(homeURL: homeURL, sessionIDs: deletedIDs)
+        } else {
+            after = [:]
+        }
+        nativeDeleteSpaceReportID = report.id
+        nativeDeleteSpaceSummary = DeletedConversationSpaceSummary(
+            verifiedDeletedSessionIDs: deletedIDs,
+            before: homeURL == nil ? [:] : before,
+            after: after
+        )
     }
 
     /// The successful return from the current official Delete owns consent.

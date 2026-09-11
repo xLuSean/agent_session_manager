@@ -540,6 +540,9 @@ actor DeleteExecutionRecoveryReconciler {
         snapshot: ProviderInventorySnapshot
     ) async throws -> PersistentOperationReport {
         let context = try loadContext(previewID: previewID)
+        if context.compatibilityBinding != nil && snapshot.compatibilityBinding == nil {
+            throw CodexCompatibilityInspector.CheckError.admissionRequired
+        }
         let exact = await readback.exactReadObservation(
             nativeSessionID: context.preview.items[0].nativeSessionID,
             auditedRuntimeVersion: context.runtimeVersion,

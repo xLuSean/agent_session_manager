@@ -431,6 +431,11 @@ public actor CodexNativeBatchCoordinator {
               let checkpoint = try store.providerCheckpoint(for: .codex) else {
             return nil
         }
+        // A cache-format migration or pending Settings check is not a batch
+        // outcome. Preserve its claim until the original binding is available.
+        if checkpoint.compatibilityBinding != nil && snapshot.compatibilityBinding == nil {
+            throw CodexCompatibilityInspector.CheckError.admissionRequired
+        }
         guard checkpoint.inventoryComplete,
               checkpoint.inventoryHash == preview.providerInventoryHash,
               let runtimeVersion = checkpoint.runtimeVersion,

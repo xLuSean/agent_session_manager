@@ -8,8 +8,13 @@ struct NativeDeletePreviewSheet: View {
     let preview: OperationPreview
     @State private var typedToken = ""
     @State private var isSubmitting = false
+    @State private var submissionFailure: NativeDeleteSubmissionFailure?
 
     var body: some View {
+        let size = NativeDeletePreviewSheetLayout.size(
+            visibleScreenSize: (NSApp.keyWindow?.screen ?? NSScreen.main)?
+                .visibleFrame.size ?? CGSize(width: 1_280, height: 800)
+        )
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Label("Permanent Delete Preview", systemImage: "trash.slash.fill")
@@ -20,8 +25,23 @@ struct NativeDeletePreviewSheet: View {
                     .foregroundStyle(.secondary)
             }
 
-            CodexDesktopQuitRequirementBanner()
+            ScrollView {
+                previewContent
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            submissionStatus
+            footer
+        }
+        .padding(24)
+        .frame(width: size.width, height: size.height)
+        .interactiveDismissDisabled(isSubmitting)
+    }
+
+    private var previewContent: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            CodexDesktopQuitRequirementBanner()
             Text("Permanently deletes these conversations and cleans their Desktop residue. This cannot be undone. Automation settings are kept; remaining global settings require a separate diff review.")
                 .font(.callout)
 
@@ -48,44 +68,70 @@ struct NativeDeletePreviewSheet: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color.red.opacity(0.45), lineWidth: 1)
             }
+            .disabled(isSubmitting)
+        }
+    }
 
-            HStack {
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(isSubmitting)
-                    .immediateHelp("Keep the persisted Preview unused and send no Delete request")
-                Spacer()
-                Button("Delete Permanently", role: .destructive) {
-                    guard !isSubmitting else { return }
-                    isSubmitting = true
-                    Task {
-                        await model.executeNativeDelete(
-                            preview,
-                            confirmationToken: typedToken
-                        )
-                        if model.pendingNativeDeletePreview?.id == preview.id {
-                            isSubmitting = false
-                        }
+    @ViewBuilder
+    private var submissionStatus: some View {
+        if isSubmitting {
+            ProgressView(model.nativeDeleteSubmissionProgress ?? "Checking deletion requirements…")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(model.nativeDeleteSubmissionProgress ?? "Checking deletion requirements")
+        } else if let failure = submissionFailure {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(failure.title, systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                ScrollView {
+                    Text(failure.message)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 100)
+                if failure.reviewCleanup && model.isGhostRepairBulkWorkflowEnabled {
+                    Button("Review Previous Cleanup") {
+                        model.queueCleanupReviewAfterDeletePreview()
+                        dismiss()
                     }
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(isSubmitting || typedToken != preview.confirmationToken)
-                .immediateHelp(
-                    typedToken == preview.confirmationToken
-                        ? "Delete officially, then clean and verify the same IDs in Desktop"
-                        : "Enter the exact confirmation token to enable permanent deletion"
-                )
             }
-            .disabled(isSubmitting)
-
-            if isSubmitting {
-                ProgressView("Deleting once, then checking and cleaning Desktop residue…")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
         }
-        .padding(24)
-        .frame(minWidth: 700, idealWidth: 760, minHeight: 520)
-        .interactiveDismissDisabled(isSubmitting)
+    }
+
+    private var footer: some View {
+        HStack {
+            Button(submissionFailure == nil ? "Cancel" : "Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .disabled(isSubmitting)
+                .immediateHelp("Close this preview without sending another Delete request")
+            Spacer()
+            Button(submissionFailure?.canRetry == true ? "Check Again and Delete" : "Delete Permanently", role: .destructive) {
+                guard !isSubmitting else { return }
+                submissionFailure = nil
+                isSubmitting = true
+                Task {
+                    submissionFailure = await model.executeNativeDelete(
+                        preview,
+                        confirmationToken: typedToken
+                    )
+                    isSubmitting = false
+                }
+            }
+            .keyboardShortcut(.defaultAction)
+            .disabled(isSubmitting || typedToken != preview.confirmationToken
+                      || submissionFailure?.canRetry == false)
+            .immediateHelp(
+                typedToken == preview.confirmationToken
+                    ? "Delete officially, then clean and verify the same IDs in Desktop"
+                    : "Enter the exact confirmation token to enable permanent deletion"
+            )
+        }
+        .disabled(isSubmitting)
     }
 }
 
@@ -135,6 +181,32 @@ struct NativeDeleteReportSheet: View {
                 metric("Unknown", report.unknownCount)
             }
 
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Conversation space cleared")
+                    .font(.headline)
+                if model.nativeDeleteSpaceReportID == report.id,
+                   let summary = model.nativeDeleteSpaceSummary {
+                    Text(summary.measuredBytes.map {
+                        $0 == 0 ? "0 B" : ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                    } ?? "Not measured")
+                        .font(.title2.monospacedDigit())
+                    if !summary.isComplete {
+                        Text("Partial measurement: \(summary.measuredSessionCount) of \(summary.deletedSessionCount) successfully deleted sessions. Unmeasured files are not counted as zero.")
+                            .font(.callout)
+                    }
+                } else if model.nativeDeleteSubmissionProgress != nil,
+                          model.latestNativeDeleteReport?.id == report.id {
+                    ProgressView("Measurement will appear when this operation finishes…")
+                } else {
+                    Text("Not measured for this operation")
+                        .foregroundStyle(.secondary)
+                }
+                Text("Logical size measured before deletion, counted only when deletion succeeded and no matching conversation files remain. Excludes shared databases and backups; not the change in available disk space.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .textSelection(.enabled)
+
             Table(report.items) {
                 TableColumn("Result") { item in
                     Text(item.outcome.rawValue.capitalized)
@@ -172,7 +244,7 @@ struct NativeDeleteReportSheet: View {
 
             Text(
                 successfulItems.isEmpty
-                    ? "Success verifies canonical deletion only: both official readbacks proved the exact session absent. Codex Desktop residue is not verified here. Unknown is never retried automatically. Released disk space is not claimed or estimated."
+                    ? "Success verifies canonical deletion only: both official readbacks proved the exact session absent. Codex Desktop residue is not verified here. Unknown is never retried automatically."
                     : model.nativeDeleteDesktopCleanupDetail(reportID: report.id)
             )
                 .font(.callout)

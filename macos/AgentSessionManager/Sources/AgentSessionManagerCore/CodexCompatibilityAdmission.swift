@@ -44,9 +44,7 @@ struct CodexCompatibilityAdmission: Equatable, Sendable {
               report.provider.sha256.count == 64,
               report.provider.sha256.allSatisfy({ "0123456789abcdef".contains($0) }),
               report.checkedAt <= now.addingTimeInterval(5),
-              let behavior = report.behavior,
-              behavior.revision == CodexCompatibilityBehaviorReport.policyRevision,
-              behavior.checkedAt <= now.addingTimeInterval(5) else { return nil }
+              report.permitsSavedLifecycleFeature(feature, now: now) else { return nil }
         // Duplicate or missing results are ambiguous, even if one says passed.
         let required: [CodexCompatibilityFeature] = feature == .officialDelete
             ? [.browsing, .archiveRestore, .officialDelete] : [.browsing, .archiveRestore]
@@ -55,8 +53,26 @@ struct CodexCompatibilityAdmission: Equatable, Sendable {
             guard matches.count == 1,
                   [.supportedByBuild, .needsBehaviorVerification].contains(matches[0].status) else { return nil }
         }
-        let observations = behavior.results.filter { $0.feature == feature }
-        guard observations.count == 1, observations[0].status == .passed else { return nil }
         return .init(feature: feature, report: report, home: home.standardizedFileURL, now: now)
+    }
+}
+
+extension CodexCompatibilityReport {
+    /// Known runtimes may use a successful Settings interface check. Unknown
+    /// runtimes still require the explicitly requested isolated behavior test.
+    func permitsSavedLifecycleFeature(_ feature: CodexCompatibilityFeature, now: Date = Date()) -> Bool {
+        guard [.archiveRestore, .officialDelete].contains(feature),
+              revision == Self.policyRevision, checkedAt <= now.addingTimeInterval(5) else { return false }
+        if let behavior {
+            let matches = behavior.results.filter { $0.feature == feature }
+            return behavior.revision == CodexCompatibilityBehaviorReport.policyRevision
+                && behavior.checkedAt <= now.addingTimeInterval(5)
+                && matches.count == 1 && matches[0].status == .passed
+        }
+        let matches = results.filter { $0.feature == feature }
+        let builtIn = feature == .officialDelete
+            ? CodexAppServerProvider.supportsVerifiedDeleteContract(provider.version)
+            : CodexAppServerProvider.supportsVerifiedLifecycleContract(provider.version)
+        return builtIn && matches.count == 1 && matches[0].status == .supportedByBuild
     }
 }

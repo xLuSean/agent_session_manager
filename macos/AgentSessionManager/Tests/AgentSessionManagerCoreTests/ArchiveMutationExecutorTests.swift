@@ -408,10 +408,13 @@ final class ArchiveMutationExecutorTests: XCTestCase {
         guard permissions & 0o100 != 0 else {
             throw XCTSkip("Archive fixture executable bit is unavailable in this build environment.")
         }
+        let compatibility = try await CodexCompatibilityTestSupport(executable: executable,
+            home: URL(fileURLWithPath: "/tmp"), version: "0.149.0")
+        defer { XCTAssertNoThrow(try compatibility.cleanUp()) }
         let source = CodexAppServerClient(configuration: CodexAppServerConfiguration(
             executableURL: executable,
             timeout: 2
-        ))
+        ), compatibilityInspector: compatibility.inspector)
 
         try await source.archive(threadID: nativeID)
     }

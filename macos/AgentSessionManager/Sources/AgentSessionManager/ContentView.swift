@@ -98,7 +98,9 @@ struct ContentView: View {
         .sheet(item: $model.latestNativeRestoreReport) { report in
             NativeRestoreReportSheet(report: report)
         }
-        .sheet(item: $model.pendingNativeDeletePreview) { preview in
+        .sheet(item: $model.pendingNativeDeletePreview, onDismiss: {
+            model.presentCleanupAfterDeletePreview()
+        }) { preview in
             NativeDeletePreviewSheet(preview: preview)
                 .environmentObject(model)
         }

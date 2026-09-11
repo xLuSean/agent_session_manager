@@ -8,7 +8,23 @@ final class CodexAppServerBoundaryTests: XCTestCase {
     func testExpectedHomeRejectsEveryReadAndLifecycleEntryBeforeRequests() async throws {
         let fixture = try BoundaryFixture(runtime: "0.147.0")
         defer { fixture.cleanUp() }
-        let client = CodexAppServerClient(configuration: fixture.configuration, expectedCodexHome: fixture.root)
+        let inspector = CodexCompatibilityInspector(reportURL: fixture.root.appendingPathComponent("compatibility.json"), desktopCandidates: [])
+        let request = CodexCompatibilityRequest(providerExecutable: fixture.configuration.executableURL!, codexHome: fixture.root)
+        // Synthetic cached Settings result lets this test reach the independent
+        // initialized-home guard instead of stopping at missing compatibility.
+        var report = CodexCompatibilityReport(revision: CodexCompatibilityReport.policyRevision, checkedAt: Date(),
+            provider: .init(path: request.providerExecutable.path, version: "0.147.0", sha256: String(repeating: "a", count: 64)),
+            desktop: nil, environmentFingerprint: "fixture", desktopSchemaProfile: nil,
+            results: [.init(feature: .browsing, status: .supportedByBuild, detail: "fixture"),
+                      .init(feature: .archiveRestore, status: .supportedByBuild, detail: "fixture"),
+                      .init(feature: .officialDelete, status: .supportedByBuild, detail: "fixture")], notes: [])
+        report.installation = try .read(request, desktopCandidates: [])
+        report.behavior = .init(revision: 1, checkedAt: Date(), results: [
+            .init(feature: .archiveRestore, status: .passed, detail: "fixture"),
+            .init(feature: .officialDelete, status: .passed, detail: "fixture")])
+        try await inspector.saveInspection(report)
+        let client = CodexAppServerClient(configuration: fixture.configuration, expectedCodexHome: fixture.root,
+                                         compatibilityInspector: inspector)
         for observed in ["", "relative-home", fixture.root.path + "-other", fixture.root.path + "\0"] {
             try fixture.setHome(observed)
             for operation in 0..<8 {

@@ -63,7 +63,7 @@ Clear Selected Records 或 Clear All List Records 可移除選取或全部清單
 ## 目前能做什麼
 
 - 瀏覽 Codex Live sessions，依狀態、Project、Trust Folder 或 Working Folder 篩選。
-- 列表顯示 **Conversation Size**（對話檔大小），可由大到小或由小到大排序。背景加總 `sessions` 與 `archived_sessions` 中同 ID 的新舊對話檔，快取到下次重新整理；尚未計算或無法確認時顯示「—」。不包含專案、共用資料庫與 ASM 備份／報告，也不代表刪除後一定能釋放的空間。Deleted 顯示目前剩餘檔案大小，不沿用刪除前數字。
+- 列表顯示 **Size**（對話檔大小），可由大到小或由小到大排序。背景加總 `sessions` 與 `archived_sessions` 中同 ID 的新舊對話檔，快取到下次重新整理；多 ID 檔名以有限量的檔頭 metadata 確認歸屬。尚未計算或無法確認時顯示「—」，停留游標或開啟詳細資訊可看原因。不包含專案、共用資料庫與 ASM 備份／報告，也不代表刪除後一定能釋放的空間。Deleted 顯示目前剩餘檔案大小，不沿用刪除前數字。
 - 補入 Codex 0.153.4 官方清單漏列、但仍可依 ID 讀取的對話，顯示核對後的來源標籤；這個標籤不代表對話已停用或是 Ghost。
 - 使用 checkbox 精確多選並批量 Archive、Restore、移入／移出 Trash Bin。
 - 各分類輸入搜尋文字後可用 **Select all search results** 全選目前顯示的結果；沒有搜尋時，只有 Trash Bin 提供 **Select all filtered**。其他已勾選項目保持不變。

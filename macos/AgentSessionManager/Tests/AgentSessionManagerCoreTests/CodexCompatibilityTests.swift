@@ -154,6 +154,9 @@ final class CodexCompatibilityTests: XCTestCase {
         let silent = await inspector.takeDiagnostics(runID: runID)
         XCTAssertTrue(silent.isEmpty)
         _ = await inspector.isCurrent(fixtureReport(), request: .init(providerExecutable: executable, codexHome: root, diagnosticRunID: runID))
+        let lightweight = await inspector.takeDiagnostics(runID: runID)
+        XCTAssertTrue(lightweight.isEmpty, "Startup comparison must not inspect database metadata")
+        _ = try? await inspector.inspect(.init(providerExecutable: executable, codexHome: root, diagnosticRunID: runID))
         let wrongRun = await inspector.takeDiagnostics(runID: UUID())
         XCTAssertTrue(wrongRun.isEmpty)
         let events = await inspector.takeDiagnostics(runID: runID)
@@ -165,7 +168,7 @@ final class CodexCompatibilityTests: XCTestCase {
         let drained = await inspector.takeDiagnostics(runID: runID)
         XCTAssertTrue(drained.isEmpty)
         for _ in 0..<51 {
-            _ = await inspector.isCurrent(fixtureReport(), request: .init(providerExecutable: executable, codexHome: root, diagnosticRunID: runID))
+            _ = try? await inspector.inspect(.init(providerExecutable: executable, codexHome: root, diagnosticRunID: runID))
         }
         let bounded = await inspector.takeDiagnostics(runID: runID)
         XCTAssertEqual(bounded.count, 200)
@@ -222,8 +225,7 @@ final class CodexCompatibilityTests: XCTestCase {
         try Data(script.utf8).write(to: executable)
         let nextLaunch = CodexCompatibilityInspector(reportURL: root.appendingPathComponent("report.json"), desktopCandidates: [])
         let returned = try await nextLaunch.reviewSavedCompatibility(request)
-        XCTAssertTrue(returned.isCurrent)
-        XCTAssertEqual(returned.report, report, "An older matching environment is reusable after restart without a new inspection")
+        XCTAssertFalse(returned.isCurrent, "Replacing an executable requires a Settings check; startup never hashes it to rediscover an old match")
         let latest = try await nextLaunch.savedReport()
         XCTAssertEqual(latest, second, "Startup must not run or save a new inspection")
     }

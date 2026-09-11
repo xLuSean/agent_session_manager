@@ -245,7 +245,9 @@ struct ReportHistoryView: View {
                         detailRow("Success / Failure / Unknown", "\(report.successCount) / \(report.failureCount) / \(report.unknownCount)")
                         detailRow(
                             "Verified released bytes",
-                            ByteCountFormatter.string(fromByteCount: report.verifiedReleasedBytes, countStyle: .file)
+                            report.releasedBytesComplete
+                                ? ByteCountFormatter.string(fromByteCount: report.verifiedReleasedBytes, countStyle: .file)
+                                : "Not measured"
                         )
                         detailRow("Released bytes complete", report.releasedBytesComplete ? "Yes" : "No")
                         if let errorCode = report.errorCode {

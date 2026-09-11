@@ -3,6 +3,102 @@ import XCTest
 
 @MainActor
 final class SessionManagerModelTests: XCTestCase {
+    func testDeleteSpaceMeasurementUsesOnlySuccessfulAbsentItemsAndOneBatchScan() async {
+        let reader = AppTestSessionSizeReader(values: ["a": 0, "b": 0, "failed": 0, "unknown": 0])
+        let model = SessionManagerModel(sessionFileSizeReader: reader)
+        let report = makeNativeDeleteReport(items: [("a", .success, .absent), ("b", .success, .absent),
+                                                   ("failed", .failure, .absent), ("unknown", .success, .unavailable)])
+        await model.measureNativeDeleteSpace(report: report, homeURL: URL(fileURLWithPath: "/fixture"),
+                                            before: ["a": 100, "b": 200, "failed": 300, "unknown": 400])
+        XCTAssertEqual(model.nativeDeleteSpaceReportID, report.id)
+        XCTAssertEqual(model.nativeDeleteSpaceSummary?.measuredBytes, 300)
+        XCTAssertEqual(model.nativeDeleteSpaceSummary?.deletedSessionCount, 2)
+        let requests = await reader.requestedIDs
+        XCTAssertEqual(requests, [Set(["a", "b"])])
+    }
+
+    func testDeleteSpaceDoesNotInventMissingBaselineOrMeasureRecoveredReport() async {
+        let reader = AppTestSessionSizeReader(values: ["a": 0])
+        let model = SessionManagerModel(sessionFileSizeReader: reader)
+        let report = makeNativeDeleteReport(items: [("a", .success, .absent)])
+        await model.measureNativeDeleteSpace(report: report, homeURL: nil, before: ["a": 100])
+        XCTAssertNil(model.nativeDeleteSpaceSummary?.measuredBytes)
+        let recovered = NativeDeleteReport(id: UUID(), previewID: report.previewID, outcome: report.outcome,
+                                           completedAt: report.completedAt, items: report.items, recoveredAfterInterruption: true)
+        await model.measureNativeDeleteSpace(report: recovered, homeURL: URL(fileURLWithPath: "/fixture"), before: ["a": 100])
+        XCTAssertNotEqual(model.nativeDeleteSpaceReportID, recovered.id)
+        let requests = await reader.requestedIDs
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testDeleteFailureAllowsRetryOnlyWithUnexpiredUnusedPreviewEvidence() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let unused = NativeDeleteSubmissionFailure.stopped(
+            message: "Quit Codex first.", unusedPreviewExpiresAt: now.addingTimeInterval(60), now: now)
+        XCTAssertTrue(unused.canRetry)
+        XCTAssertEqual(unused.title, "Deletion has not started")
+        XCTAssertTrue(unused.message.contains("Check Again and Delete"))
+        for expiry: Date? in [nil, now, now.addingTimeInterval(-1)] {
+            let stopped = NativeDeleteSubmissionFailure.stopped(
+                message: "Review required.", unusedPreviewExpiresAt: expiry, now: now)
+            XCTAssertFalse(stopped.canRetry)
+            XCTAssertFalse(stopped.message.contains("No Delete request was sent"))
+        }
+    }
+
+    func testDeletePreviewKeepsFooterWithinScreenBounds() {
+        for screen in [CGSize(width: 1_280, height: 720), CGSize(width: 1_440, height: 900),
+                       CGSize(width: 800, height: 600), CGSize(width: 2_560, height: 1_440)] {
+            let size = NativeDeletePreviewSheetLayout.size(visibleScreenSize: screen)
+            XCTAssertLessThanOrEqual(size.width, screen.width - 80)
+            XCTAssertLessThanOrEqual(size.height, screen.height - 120)
+            XCTAssertLessThanOrEqual(size.width, 760)
+            XCTAssertLessThanOrEqual(size.height, 820)
+        }
+    }
+
+    func testDeleteFailureReturnsToPreviewWithoutHiddenGlobalAlert() async {
+        let model = makeModel(sessions: [])
+        let preview = OperationPreview(id: UUID(), provider: .codex, operation: .emptyTrash,
+                                       confirmationToken: "fixture", generatedAt: Date(), items: [], warnings: [])
+        model.pendingNativeDeletePreview = preview
+        let failure = await model.executeNativeDelete(preview, confirmationToken: "fixture")
+        XCTAssertNotNil(failure)
+        XCTAssertFalse(failure?.canRetry ?? true)
+        XCTAssertNil(model.errorMessage, "The visible preview owns submission failures, not an alert behind it")
+        XCTAssertNil(model.nativeDeleteSubmissionProgress)
+        XCTAssertEqual(model.pendingNativeDeletePreview?.id, preview.id)
+    }
+
+    func testPreviousCleanupBlockReturnsActionableFeedbackAndDoesNotConsumePreview() async {
+        let model = makeModel(sessions: [],
+                              nativeDeleteDesktopCleanupCoordinator: AppTestDesktopCleanupLinkageCoordinator(),
+                              bulkReconciliationEnabled: true)
+        let report = makeNativeDeleteReport(items: [(AppTestGhostRepairBulkFixture.eligibleA, .success, .absent)])
+        model.latestNativeDeleteReport = report
+        model.queueNativeDeleteDesktopCleanup(report: report)
+        let before = model.nativeDeleteDesktopCleanupState
+        let preview = OperationPreview(id: UUID(), provider: .codex, operation: .emptyTrash,
+                                       confirmationToken: "fixture", generatedAt: Date(), items: [], warnings: [])
+        model.pendingNativeDeletePreview = preview
+        for _ in 0..<2 {
+            let failure = await model.executeNativeDelete(preview, confirmationToken: "fixture")
+            XCTAssertEqual(failure, .cleanupRequired)
+            XCTAssertNil(model.errorMessage)
+            XCTAssertNil(model.nativeDeleteSubmissionProgress)
+            XCTAssertEqual(model.nativeDeleteDesktopCleanupState, before)
+            XCTAssertEqual(model.pendingNativeDeletePreview?.id, preview.id)
+        }
+        model.queueCleanupReviewAfterDeletePreview()
+        XCTAssertFalse(model.isGhostRepairBulkInventoryPresented)
+        model.presentCleanupAfterDeletePreview()
+        XCTAssertTrue(model.isGhostRepairBulkInventoryPresented)
+        XCTAssertEqual(model.nativeDeleteDesktopCleanupState, before, "Navigation must not resend or discard cleanup")
+        _ = model.setGhostRepairBulkInventoryPresented(false)
+        model.presentCleanupAfterDeletePreview()
+        XCTAssertFalse(model.isGhostRepairBulkInventoryPresented, "Consume navigation once")
+    }
+
     func testUnreadableMetadataDoesNotAnnounceCodexUpdate() async throws {
         let inspector = AppTestCompatibilityInspector(current: false)
         await inspector.makeMetadataUnavailable()
@@ -249,7 +345,40 @@ final class SessionManagerModelTests: XCTestCase {
         await reader.replace(values: [:])
         await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
         XCTAssertNil(model.conversationFileSize(for: row))
+        XCTAssertEqual(model.sessionFileSizeIssues["deleted"], .unavailable)
+        XCTAssertTrue(model.conversationFileSizeHelp(for: row).contains("Unavailable does not mean zero"))
         XCTAssertFalse(model.isCalculatingSessionFileSizes)
+    }
+
+    func testSizeIssueReasonsFollowVisibleScopeAndClearAfterSuccessfulRefresh() async {
+        let reader = AppTestSessionSizeInspectionReader(result: .init(
+            sizes: ["large": 3_900_000_035, "small": 210_000],
+            issues: ["blocked": .conflictingIdentity, "archived": .headerBudgetExceeded]))
+        let model = SessionManagerModel(sessionFileSizeReader: reader)
+        let large = SessionPresentation(session: makeSession(nativeID: "large", title: "Large", state: .active))
+        let small = SessionPresentation(session: makeSession(nativeID: "small", state: .active))
+        let blocked = SessionPresentation(session: makeSession(nativeID: "blocked", state: .active))
+        let archived = SessionPresentation(session: makeSession(nativeID: "archived", state: .archived))
+        model.sessionRows = [small, blocked, large, archived]
+        await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
+        model.sessionListSort = .largest
+        XCTAssertEqual(model.filteredSessions.map(\.nativeID), ["large", "small", "blocked"])
+        XCTAssertEqual(model.conversationFileSizeLabel(for: large), ByteCountFormatter.string(fromByteCount: 3_900_000_035, countStyle: .file))
+        XCTAssertEqual(model.unavailableConversationSizeCount, 1)
+        XCTAssertTrue(model.conversationFileSizeHelp(for: blocked).contains(SessionFileSizeIssue.conflictingIdentity.explanation))
+        XCTAssertFalse(model.conversationFileSizeHelp(for: large).contains("Unavailable"))
+        model.searchText = "Large"
+        XCTAssertEqual(model.unavailableConversationSizeCount, 0)
+        model.selectStatusFilter(.archive)
+        XCTAssertEqual(model.unavailableConversationSizeCount, 1)
+        XCTAssertTrue(model.conversationFileSizeHelp(for: archived).contains(SessionFileSizeIssue.headerBudgetExceeded.explanation))
+
+        await reader.replace(result: .init(sizes: ["large": 3_900_000_035, "small": 210_000, "blocked": 5, "archived": 8]))
+        await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
+        XCTAssertTrue(model.sessionFileSizeIssues.isEmpty)
+        XCTAssertEqual(model.unavailableConversationSizeCount, 0)
+        XCTAssertEqual(model.conversationFileSize(for: archived), 8)
+        XCTAssertFalse(model.conversationFileSizeHelp(for: archived).contains(SessionFileSizeIssue.headerBudgetExceeded.explanation))
     }
 
     func testUnavailableHomeCancelsOldSizeRequestWithoutReadingDefaultHome() async {
@@ -261,6 +390,8 @@ final class SessionManagerModelTests: XCTestCase {
         model.refreshSessionFileSizes(homeURL: nil)
         await oldRequest?.value
         XCTAssertNil(model.conversationFileSize(for: row))
+        XCTAssertEqual(model.sessionFileSizeIssues["first"], .homeUnavailable)
+        XCTAssertTrue(model.conversationFileSizeHelp(for: row).contains(SessionFileSizeIssue.homeUnavailable.explanation))
         XCTAssertFalse(model.isCalculatingSessionFileSizes)
     }
 
@@ -6472,9 +6603,21 @@ final class SessionManagerModelTests: XCTestCase {
 
 private actor AppTestSessionSizeReader: SessionFileSizeReading {
     private var values: [String: Int64]
+    private(set) var requestedIDs: [Set<String>] = []
     init(values: [String: Int64]) { self.values = values }
     func replace(values: [String: Int64]) { self.values = values }
-    func sizes(homeURL: URL, sessionIDs: Set<String>) -> [String: Int64] { values }
+    func sizes(homeURL: URL, sessionIDs: Set<String>) -> [String: Int64] {
+        requestedIDs.append(sessionIDs)
+        return values
+    }
+}
+
+private actor AppTestSessionSizeInspectionReader: SessionFileSizeReading {
+    private var result: SessionFileSizeInspection
+    init(result: SessionFileSizeInspection) { self.result = result }
+    func replace(result: SessionFileSizeInspection) { self.result = result }
+    func sizes(homeURL: URL, sessionIDs: Set<String>) -> [String: Int64] { result.sizes }
+    func inspect(homeURL: URL, sessionIDs: Set<String>) async -> SessionFileSizeInspection { result }
 }
 
 private actor AppTestCompatibilityInspector: CodexCompatibilityInspecting {

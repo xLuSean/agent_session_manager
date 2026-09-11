@@ -68,7 +68,7 @@ and is not erasure of all ASM data. See the [manual](docs/USER_GUIDE.md) and [va
 ## Current features
 
 - Browse Codex Live sessions and filter by status, Project, Trust Folder, or Working Folder.
-- See **Conversation Size** and sort largest/smallest first. Sizes are calculated in the background from all matching current and old conversation files in `sessions` and `archived_sessions`, then cached until refresh. `—` means unavailable or not yet calculated. These logical file sizes exclude projects, shared databases and ASM backups/reports; they are not guaranteed reclaimable space. Deleted rows show remaining files, not historical sizes.
+- See **Size** and sort largest/smallest first. Sizes are calculated in the background from all matching current and old conversation files in `sessions` and `archived_sessions`, then cached until refresh. Multi-ID filenames are resolved using bounded header metadata. `—` means unavailable or not yet calculated; hover for the reason, also shown in session details. These logical file sizes exclude projects, shared databases and ASM backups/reports; they are not guaranteed reclaimable space. Deleted rows show remaining files, not historical sizes.
 - Find officially readable sessions omitted by Codex 0.153.4's list, with verified local supplement labels. This source label does not mean a session is unused or a Ghost.
 - Use checkboxes for exact multi-selection and batch Archive, Restore, and Trash Bin operations.
 - Use **Select all search results** after entering a search in any collection; without a search, **Select all filtered** is available only in Trash Bin. Existing selections outside the shown results are kept.
@@ -172,6 +172,12 @@ requires manual acceptance of an exact manifest before creating a local tag. Eac
 See [the versioning workflow](docs/DEVELOPMENT.md#版本與本機候選版) for branch restrictions and failure recovery.
 
 ## Local data
+
+Full compatibility verification runs only when requested in Settings. Startup and normal operations compare
+the saved CLI/Desktop installation (path, Desktop version/build and lightweight file metadata); they do not
+rehash executables, validate the App signature or rescan database schemas. A changed or unrecorded installation
+requires a Settings check before lifecycle writes. Older reports without this metadata need one explicit check.
+Per-session protections, result readback and cleanup-specific database safety checks still apply.
 
 Manager-owned SQLite state and diagnostic logs are stored under:
 

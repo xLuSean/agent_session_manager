@@ -82,7 +82,7 @@ final class CodexLifecycleExecutionGateTests: XCTestCase {
 }
 
 actor LifecycleExecutionGateStub: CodexLifecycleExecutionChecking {
-    private let error: CodexLifecycleExecutionGateError?
+    private var error: CodexLifecycleExecutionGateError?
     private var callCount = 0
 
     init(error: CodexLifecycleExecutionGateError? = nil) {
@@ -96,5 +96,9 @@ actor LifecycleExecutionGateStub: CodexLifecycleExecutionChecking {
 
     func observedCallCount() -> Int {
         callCount
+    }
+
+    func simulateDesktopExit() {
+        error = nil
     }
 }

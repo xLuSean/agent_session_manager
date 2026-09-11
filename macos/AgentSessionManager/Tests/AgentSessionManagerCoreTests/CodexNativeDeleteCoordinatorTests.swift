@@ -102,6 +102,15 @@ final class CodexNativeDeleteCoordinatorTests: XCTestCase {
         XCTAssertEqual(counts.inventory, 0)
         XCTAssertEqual(counts.delete, 0)
         XCTAssertEqual(counts.exactRead, 0)
+
+        // The user explicitly tries the same unused preview after quitting.
+        // Process evidence must be read again, not cached from the first click.
+        await gate.simulateDesktopExit()
+        _ = try await coordinator.execute(preview: preview, confirmationToken: preview.confirmationToken)
+        let recheckedGateCalls = await gate.observedCallCount()
+        let afterRetry = await transport.callCounts()
+        XCTAssertEqual(recheckedGateCalls, 2)
+        XCTAssertEqual(afterRetry.delete, 1)
     }
 
     func testUnknownCrossHostRunningAndCurrentCanAttemptDeleteOnce() async throws {

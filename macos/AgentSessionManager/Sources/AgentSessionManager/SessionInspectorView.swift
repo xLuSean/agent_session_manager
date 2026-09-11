@@ -44,7 +44,13 @@ struct SessionInspectorView: View {
                             )
                             detailRow("Updated", session.updatedAt.formatted(date: .abbreviated, time: .shortened))
                             detailRow("Conversation size", model.conversationFileSizeLabel(for: session))
-                                .help(model.conversationFileSizeHelp)
+                                .help(model.conversationFileSizeHelp(for: session))
+                            if let issue = model.sessionFileSizeIssues[session.nativeID] {
+                                Text(issue.explanation)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
                             detailRow(
                                 "Descendants",
                                 session.descendantCountKnown ? "\(session.descendantCount)" : "Unavailable"

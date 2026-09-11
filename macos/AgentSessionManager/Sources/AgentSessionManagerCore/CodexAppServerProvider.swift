@@ -451,9 +451,10 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
         self.expectedCodexHome = nil
     }
 
-    init(configuration: CodexAppServerConfiguration = .init(), expectedCodexHome: URL) {
+    init(configuration: CodexAppServerConfiguration = .init(), expectedCodexHome: URL,
+         compatibilityInspector: CodexCompatibilityInspector = .init()) {
         self.configuration = configuration
-        self.compatibilityInspector = CodexCompatibilityInspector()
+        self.compatibilityInspector = compatibilityInspector
         self.expectedCodexHome = expectedCodexHome
     }
 
@@ -471,7 +472,7 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
     }
 
     private func boundInventory(executableURL: URL, lifecycleOnly: Bool = false) async throws -> CodexInventorySnapshot {
-        let beforeSHA = try CodexCompatibilityInspector.executableSHA256(executableURL)
+        let beforeInstallation = try CodexCompatibilityInstallation.FileStamp.read(executableURL)
         var snapshot = try runInventory(executableURL: executableURL, lifecycleOnly: lifecycleOnly)
         if let version = snapshot.runtimeVersion,
            snapshot.serverInfo.codexHome.hasPrefix("/") {
@@ -479,7 +480,7 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
                 .init(providerExecutable: executableURL, codexHome: URL(fileURLWithPath: snapshot.serverInfo.codexHome)),
                 runtimeVersion: version)
         }
-        guard try CodexCompatibilityInspector.executableSHA256(executableURL) == beforeSHA else {
+        guard try CodexCompatibilityInstallation.FileStamp.read(executableURL) == beforeInstallation else {
             throw CodexCompatibilityInspector.CheckError.changed
         }
         return snapshot
@@ -742,24 +743,14 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
     ) async throws {
         let feature: CodexCompatibilityFeature = method == "thread/delete" ? .officialDelete : .archiveRestore
         let runtimeVersion = probeRuntimeVersion(executableURL: executableURL)
-        let contractSupported = method == "thread/delete"
-            ? CodexAppServerProvider.supportsVerifiedDeleteContract(runtimeVersion)
-            : CodexAppServerProvider.supportsVerifiedLifecycleContract(runtimeVersion)
-        // Only a matching cached test can admit an unknown runtime as far as
-        // initialize. The actual initialized home is checked before mutation.
-        let candidate: Bool
-        if contractSupported && expectedCompatibility == nil { candidate = false }
-        else {
-            candidate = try await compatibilityInspector.hasLifecycleCandidate(
-                executable: executableURL, runtimeVersion: runtimeVersion ?? "", feature: feature)
-        }
-        guard (contractSupported && expectedCompatibility == nil) || candidate else {
-            throw CodexAppServerError.launchFailed(
-                "Codex runtime \(runtimeVersion ?? "unavailable") is outside the verified lifecycle contract."
-            )
+        // Settings owns verification. Operations only compare the saved result
+        // with current version/build/path and small filesystem metadata.
+        guard try await compatibilityInspector.hasLifecycleCandidate(
+            executable: executableURL, runtimeVersion: runtimeVersion ?? "", feature: feature) else {
+            throw CodexCompatibilityInspector.CheckError.admissionRequired
         }
         let launchPath = executableURL.resolvingSymlinksInPath()
-        let launchSHA = candidate ? try CodexCompatibilityInspector.executableSHA256(launchPath) : nil
+        let launchInstallation = try CodexCompatibilityInstallation.FileStamp.read(executableURL)
         let process = Process()
         let input = Pipe()
         let output = Pipe()
@@ -797,7 +788,7 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
 #if ASM_ISOLATED_DELETE_ACCEPTANCE
         try verifyIsolatedDeleteAcceptanceCodexHome(serverInfo.codexHome)
 #endif
-        if candidate {
+        do {
             guard serverInfo.codexHome.hasPrefix("/") else { throw CodexCompatibilityInspector.CheckError.changed }
             let compatibilityRequest = CodexCompatibilityRequest(providerExecutable: executableURL,
                 codexHome: URL(fileURLWithPath: serverInfo.codexHome))
@@ -805,7 +796,7 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
                 runtimeVersion: runtimeVersion ?? "", feature: feature)
             guard (expectedCompatibility == nil || (expectedCompatibility?.environmentFingerprint == admission.environmentFingerprint
                     && expectedCompatibility?.supports(feature == .officialDelete ? .permanentDelete : .archive, runtimeVersion: runtimeVersion) == true)),
-                  admission.runtime.sha256 == launchSHA,
+                  try CodexCompatibilityInstallation.FileStamp.read(executableURL) == launchInstallation,
                   executableURL.resolvingSymlinksInPath() == launchPath else {
                 throw CodexCompatibilityInspector.CheckError.changed
             }
@@ -834,11 +825,9 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
         expectedCompatibility: CodexCompatibilityBinding? = nil
     ) async throws -> CodexExactReadSnapshot {
         let launchPath = executableURL.resolvingSymlinksInPath()
-        let externalLaunchSHA = captureExternalDeletionAbsence
-            ? try CodexCompatibilityInspector.executableSHA256(launchPath) : nil
+        let launchInstallation = try CodexCompatibilityInstallation.FileStamp.read(executableURL)
         let runtimeVersion = probeRuntimeVersion(executableURL: launchPath)
         let dynamicDelete = captureDeleteAbsence && (expectedCompatibility != nil || !CodexAppServerProvider.supportsVerifiedDeleteContract(runtimeVersion))
-        let launchSHA = dynamicDelete ? try CodexCompatibilityInspector.executableSHA256(launchPath) : nil
         let process = Process()
         let input = Pipe()
         let output = Pipe()
@@ -893,7 +882,7 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
                case let .rpcError(code, message) = error,
                code == -32600, message == "thread not loaded: \(threadID)" {
                 guard executableURL.resolvingSymlinksInPath() == launchPath,
-                      try CodexCompatibilityInspector.executableSHA256(launchPath) == externalLaunchSHA else {
+                      try CodexCompatibilityInstallation.FileStamp.read(executableURL) == launchInstallation else {
                     throw CodexCompatibilityInspector.CheckError.changed
                 }
                 throw CodexExternalDeletionAbsenceEvidence(nativeSessionID: threadID,
@@ -913,7 +902,7 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
                     runtimeVersion: runtimeVersion, feature: .officialDelete)
                 guard (expectedCompatibility == nil || (expectedCompatibility?.environmentFingerprint == verified.environmentFingerprint
                         && expectedCompatibility?.supports(.permanentDelete, runtimeVersion: runtimeVersion) == true)),
-                      verified.runtime.sha256 == launchSHA,
+                      try CodexCompatibilityInstallation.FileStamp.read(executableURL) == launchInstallation,
                       executableURL.resolvingSymlinksInPath() == launchPath else { throw error }
                 try CodexUnlistedSessionInventory.verifyLocalAbsence(home: verified.codexHome, threadID: threadID)
                 try await compatibilityInspector.requireCurrent(verified, request: compatibilityRequest)

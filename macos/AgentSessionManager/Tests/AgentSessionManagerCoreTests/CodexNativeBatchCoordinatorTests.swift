@@ -657,6 +657,34 @@ final class CodexNativeBatchCoordinatorTests: XCTestCase {
         }
     }
 
+    func testInterruptedTrashBatchWaitsForSettingsThenRegistersOnlyArchivedItems() async throws {
+        let sessions = (1...34).map { session($0, state: .active) }
+        let initial = snapshot(sessions, at: baseTime, binding: binding())
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try store.upsertProviderCheckpoint(initial.checkpoint)
+        let transport = NativeBatchTransportStub(inventories: [])
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepare(managerKeys: Set(sessions.map(\.id)),
+            operation: .moveToTrash, snapshot: initial, checkpoint: initial.checkpoint)
+        _ = try store.claimOperationPreviewForExecution(id: preview.id, now: baseTime.addingTimeInterval(10),
+            confirmationTokenHash: ArchiveExecutionHasher.confirmationTokenHash(preview.confirmationToken))
+        let partial = (1...34).map { session($0, state: $0 <= 15 ? .archived : .active) }
+        do {
+            _ = try await coordinator.recoverPending(using: snapshot(partial, at: baseTime.addingTimeInterval(20)))
+            XCTFail("Missing saved compatibility must leave the interrupted claim pending")
+        } catch CodexCompatibilityInspector.CheckError.admissionRequired {} catch { XCTFail("\(error)") }
+        XCTAssertEqual(try store.executingOperationPreviews(for: .codex).count, 1)
+        XCTAssertTrue(try store.trashMemberships(for: .codex).isEmpty)
+        let recovered = try await coordinator.recoverPending(using: snapshot(partial,
+            at: baseTime.addingTimeInterval(20), binding: binding()))
+        XCTAssertEqual(recovered?.successCount, 15)
+        XCTAssertEqual(try store.trashMemberships(for: .codex).count, 15)
+        XCTAssertTrue(try store.executingOperationPreviews(for: .codex).isEmpty)
+        let calls = await transport.calls()
+        XCTAssertTrue(calls.archive.isEmpty && calls.restore.isEmpty && calls.delete.isEmpty)
+    }
+
     func testNewRuntimeArchiveProofDoesNotUnlockDeletePreview() async throws {
         let sessions = [session(1, state: .archived), session(2, state: .archived)]
         let initial = snapshot(sessions, at: baseTime, binding: binding(features: [.archiveRestore]))

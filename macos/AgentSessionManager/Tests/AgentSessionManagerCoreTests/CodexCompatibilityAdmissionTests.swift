@@ -66,6 +66,7 @@ final class CodexCompatibilityAdmissionTests: XCTestCase {
         report.behavior = .init(revision: 1, checkedAt: Date(), results: [
             .init(feature: .archiveRestore, status: archive, detail: "fixture"),
             .init(feature: .officialDelete, status: delete, detail: "fixture")])
+        report.installation = inspected.installation
         try await inspector.saveInspection(report)
         return report
     }
@@ -144,6 +145,28 @@ final class CodexCompatibilityAdmissionTests: XCTestCase {
             currentFingerprint: report.environmentFingerprint, runtimeVersion: "0.999.0", feature: .officialDelete))
     }
 
+    func testKnownRuntimeAlsoRequiresSavedSettingsResultButNotAnIsolatedRerun() async throws {
+        let text = try String(contentsOf: executable).replacingOccurrences(of: "0.999.0", with: "0.153.4")
+        try Data(text.utf8).write(to: executable)
+        let source = client()
+        let id = "00000000-0000-4000-8000-000000000001"
+        do { try await source.archive(threadID: id); XCTFail("Built-in version alone cannot bypass Settings") }
+        catch CodexCompatibilityInspector.CheckError.admissionRequired {} catch { XCTFail("\(error)") }
+        let checked = try await inspector.inspect(request)
+        var report = CodexCompatibilityReport(revision: checked.revision, checkedAt: checked.checkedAt,
+            provider: checked.provider, desktop: nil, environmentFingerprint: checked.environmentFingerprint,
+            desktopSchemaProfile: nil,
+            results: CodexCompatibilityEvaluator.results(version: "0.153.4", browsing: true, archive: true,
+                restore: true, delete: true, desktopVersion: nil, desktopSchemaProfile: nil, desktopMetadataAvailable: false), notes: [])
+        report.installation = checked.installation
+        try await inspector.saveInspection(report)
+        XCTAssertNil(report.behavior)
+        for _ in 0..<3 { try await source.archive(threadID: id) }
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("mutations")), String(repeating: "thread/archive\n", count: 3))
+        let saved = try await inspector.savedReport()
+        XCTAssertEqual(saved, report, "Normal operations never run or rewrite verification results")
+    }
+
     func testDuplicateFailedOrObsoleteObservationsAreRejected() async throws {
         var report = try await savedFixture()
         let passed = report.behavior!.results[0]
@@ -204,14 +227,18 @@ final class CodexCompatibilityAdmissionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("mutations").path))
     }
 
-    func testSchemaDriftInvalidatesButConversationChangesDoNot() async throws {
+    func testOrdinaryAdmissionDoesNotReinspectDatabaseSchema() async throws {
         try sql("CREATE TABLE threads (id TEXT PRIMARY KEY)")
         _ = try await savedFixture()
         let admitted = try await inspector.lifecycleAdmission(request, runtimeVersion: "0.999.0", feature: .archiveRestore)
         try sql("INSERT INTO threads VALUES ('fixture')")
         try await inspector.requireCurrent(admitted, request: request)
         try sql("ALTER TABLE threads ADD COLUMN new_format TEXT")
-        do { try await inspector.requireCurrent(admitted, request: request); XCTFail("Schema changes must invalidate admission") } catch {}
+        try await inspector.requireCurrent(admitted, request: request)
+        // Database structure is checked explicitly in Settings, and again by
+        // cleanup's own data-safety checks, not before each archive request.
+        let checked = try await inspector.inspect(request)
+        XCTAssertNotEqual(checked.environmentFingerprint, admitted.environmentFingerprint)
     }
 
     func testDynamicDeleteAbsenceRequiresLocalAbsenceAndPreservesOrdinaryReadError() async throws {

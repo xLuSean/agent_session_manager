@@ -80,6 +80,7 @@ public struct CodexCompatibilityReport: Codable, Equatable, Sendable {
     public var databaseChecks: [CodexCompatibilityDatabaseCheck]? = nil
     public var desktopApplication: CodexCompatibilityDesktopApplication? = nil
     public var diagnosticRunID: UUID? = nil
+    public var installation: CodexCompatibilityInstallation? = nil
 
     /// Display only; actual admission also rechecks the live environment and identity.
     public func hasVerifiedBehavior(for feature: CodexCompatibilityFeature) -> Bool {
