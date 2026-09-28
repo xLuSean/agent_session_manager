@@ -100,8 +100,8 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
         defer { _ = try? FileManager.default.trashItem(at: work, resultingItemURL: nil) }
         let data = try? command(request.providerExecutable, arguments: ["--version"], work: work)
         let providerVersion = data.flatMap { CodexAppServerProvider.runtimeVersion(fromVersionOutput: String(decoding: $0, as: UTF8.self)) }
-        let desktopRuntime = state.desktop?.files.first { $0.requestedPath.hasSuffix("/Contents/Resources/codex") }
-        let desktopData = desktopRuntime.flatMap { try? command(URL(fileURLWithPath: $0.requestedPath), arguments: ["--version"], work: work) }
+        let desktopRuntime = state.desktop.flatMap { try? CodexCompatibilityDesktopRuntime.resolve(in: URL(fileURLWithPath: $0.path)) }
+        let desktopData = desktopRuntime.flatMap { try? command($0, arguments: ["--version"], work: work) }
         let desktopVersion = desktopData.flatMap { CodexAppServerProvider.runtimeVersion(fromVersionOutput: String(decoding: $0, as: UTF8.self)) }
         guard try installation(request) == state else { throw CheckError.changed }
         return .init(report: reports.first, isCurrent: false, environmentFingerprint: state.fingerprint,
@@ -338,8 +338,8 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
                   size <= 1_048_576, let data = try? Data(contentsOf: plistURL),
                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
                   plist["CFBundleIdentifier"] as? String == "com.openai.codex" else { continue }
-            desktopURL = app.appendingPathComponent("Contents/Resources/codex")
-            desktopSHA = try? digest(desktopURL!)
+            desktopURL = try? CodexCompatibilityDesktopRuntime.resolve(in: app)
+            desktopSHA = desktopURL.flatMap { try? digest($0) }
             parts += [app.path, Self.hash(data), desktopSHA ?? "runtime-unavailable"]
             if let identity = try? CodexCompatibilityDesktopApplicationReader.read(app) {
                 desktopApplication = identity.application

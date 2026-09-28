@@ -59,7 +59,7 @@ public struct CodexCompatibilityInstallation: Codable, Equatable, Sendable {
                 throw CodexCompatibilityInspector.CheckError.unavailable
             }
             var files = [plistStamp]
-            for path in ["Contents/Resources/codex", "Contents/MacOS/" + executable,
+            for path in CodexCompatibilityDesktopRuntime.installationRelativePaths + ["Contents/MacOS/" + executable,
                          "Contents/Resources/app.asar", "Contents/_CodeSignature/CodeResources"] {
                 let file = app.appendingPathComponent(path)
                 // A partial/uninstalled Desktop may still leave CLI browsing usable.

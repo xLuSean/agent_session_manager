@@ -55,6 +55,25 @@ struct CodexGhostRepairDatabaseSchemaProfile: Equatable, Sendable {
 
     static let admittedProfiles = [desktopV32, desktopV33, desktopV34]
 
+    /// The September layout keeps user_version 34. It is recognized for
+    /// structure inspection and synthetic SQL tests only; it is deliberately
+    /// absent from the production snapshot/mutation admission above.
+    static let desktopV34Extended = Self(
+        identifier: "desktop-v34-extended",
+        databaseVersions: desktopV34.databaseVersions,
+        desktopTables: desktopV34.desktopTables.map { table in
+            let added: [CodexGhostRepairSQLiteColumnContract]
+            switch table.table {
+            case "local_thread_catalog": added = [column("trial_conversation_type", "TEXT")]
+            case "automations": added = [column("auto_archive", "INTEGER", notNull: true, defaultValue: "0")]
+            default: added = []
+            }
+            return .init(table: table.table, columns: table.columns + added,
+                         exactColumns: table.exactColumns, customIndexes: table.customIndexes)
+        })
+
+    static let inspectionProfiles = admittedProfiles + [desktopV34Extended]
+
     static func admitted(desktopUserVersion: Int32)
         -> CodexGhostRepairDatabaseSchemaProfile?
     {

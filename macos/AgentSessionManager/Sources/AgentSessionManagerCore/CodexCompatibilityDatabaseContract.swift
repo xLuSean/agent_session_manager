@@ -4,10 +4,35 @@ import Foundation
 /// schema SQL is never executed and no application table is selected.
 enum CodexCompatibilityDatabaseContract {
     typealias Rows = (String) throws -> [[String?]]
+    private static let timingColumns = ["started_at_ms", "completed_at_ms"]
 
-    static func issue(database: CodexGhostRepairSnapshotAnalysisDatabase, version: Int32,
-                      rows: Rows) throws -> CodexCompatibilityDatabaseIssue? {
-        let profile = CodexGhostRepairDatabaseSchemaProfile.admitted(desktopUserVersion: version)
+    static func inspect(database: CodexGhostRepairSnapshotAnalysisDatabase, version: Int32,
+                        rows: Rows) throws -> (issue: CodexCompatibilityDatabaseIssue?, profile: String?, inspectionOnly: Bool) {
+        if database == .desktop {
+            let profiles = CodexGhostRepairDatabaseSchemaProfile.inspectionProfiles.filter {
+                $0.databaseVersions[.desktop] == version
+            }
+            guard !profiles.isEmpty else { return (.version, nil, false) }
+            var firstIssue: CodexCompatibilityDatabaseIssue?
+            for profile in profiles {
+                let issue = try validate(database: database, version: version, profile: profile, rows: rows)
+                if issue == nil {
+                    return (nil, profile.identifier, !CodexGhostRepairDatabaseSchemaProfile.admittedProfiles.contains(profile))
+                }
+                if firstIssue == nil { firstIssue = issue }
+            }
+            return (firstIssue, nil, false)
+        }
+        let issue = try validate(database: database, version: version, profile: nil, rows: rows)
+        var extendedHistory = false
+        if database == .threadHistory && issue == nil {
+            extendedHistory = try Array(rows("PRAGMA table_xinfo('thread_items')").compactMap { $0[1] }.suffix(timingColumns.count)) == timingColumns
+        }
+        return (issue, nil, extendedHistory)
+    }
+
+    private static func validate(database: CodexGhostRepairSnapshotAnalysisDatabase, version: Int32,
+                                 profile: CodexGhostRepairDatabaseSchemaProfile?, rows: Rows) throws -> CodexCompatibilityDatabaseIssue? {
         if database == .desktop {
             guard profile != nil else { return .version }
         } else {
@@ -53,7 +78,17 @@ enum CodexCompatibilityDatabaseContract {
             } else {
                 let contract = CodexGhostRepairReferencedTables.byDatabase[database]!.first { $0.table == name }!
                 let columns = observed.compactMap { $0[1] }
-                guard contract.exact ? columns == contract.columns : contract.columns.allSatisfy(columns.contains) else { return .columns }
+                let timedItems = database == .threadHistory && name == "thread_items"
+                    && columns == contract.columns + timingColumns
+                if timedItems {
+                    // Only these two nullable INTEGER columns are recognized;
+                    // arbitrary additions, hidden columns and changed defaults fail.
+                    guard observed.suffix(2).allSatisfy({
+                        $0[2]?.uppercased() == "INTEGER" && $0[3] == "0" && $0[4] == nil && $0[5] == "0"
+                    }) else { return .columns }
+                } else {
+                    guard contract.exact ? columns == contract.columns : contract.columns.allSatisfy(columns.contains) else { return .columns }
+                }
             }
         }
         if [.desktop, .summaries].contains(database) {

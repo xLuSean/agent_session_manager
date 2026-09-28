@@ -42,6 +42,16 @@ Size 欄顯示對話檔的邏輯大小，不包含專案、共用資料庫、備
 
 ## 檢查 Codex 相容性
 
+### 0.1.106 候選：新版 Desktop 安裝格式與結構
+
+此候選支援辨識新版 `codex-cli/CodexCLI.app/Contents/MacOS/codex`，保留舊版位置；不把 `bin/codex` 的啟動腳本當成實際執行檔。安裝內容比對會追蹤真正的執行檔。規則版本 5 使舊檢查結果失效，安裝後需重新執行 Check Compatibility。
+
+Desktop 沿用資料庫版本 34、但新增 `trial_conversation_type` 與 `auto_archive` 的格式，會辨識為獨立的 `desktop-v34-extended`；對話歷史另辨識 `started_at_ms` 與 `completed_at_ms`。只有精確已知的欄位與定義才通過，不接受任意追加欄位。舊格式支援保留。
+
+驗收此候選時，先按 Check Compatibility，確認 Desktop 版本及四個資料庫的 Structure check passed；再執行 Run Isolated Compatibility Tests，預期 Desktop SQL self-test 不再因這次結構變更而略過。最後重開 ASM，確認同一環境的結果仍有效。這些操作不需要選取或刪除真實對話。
+
+CLI 隔離測試通過仍依功能個別放行。新版 Desktop 的結構與 SQL 自我測試通過後，正式殘留清理仍顯示 Further verification needed；它尚未通過完整來源、備份管線與真正 Desktop 重開驗收。本候選不新增其私人資料庫寫入准入，因此不代表完整 Delete 已可用。
+
 ### build 16：更新前後的精簡驗收
 
 1. **先不要更新 Codex。** 安裝 compatibility-build16 DMG，開啟 ASM 並重新整理 Codex Live。

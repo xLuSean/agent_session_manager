@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
   AUDITED_GHOST_REPAIR_RUNTIME,
@@ -9,6 +11,9 @@ import {
   GHOST_REPAIR_DATABASE_CONTRACTS,
   GHOST_REPAIR_DATABASE_CONTRACT_V33,
   GHOST_REPAIR_DATABASE_CONTRACT_V34,
+  GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED,
+  DESKTOP_RUNTIME_RELATIVE_PATHS,
+  resolveDesktopRuntimeExecutable,
   UNADMITTED_GHOST_REPAIR_V33_CANDIDATE,
   evaluateGhostRepairContract,
   overallCompatibilityVerdict,
@@ -17,6 +22,50 @@ import {
 } from "../lib/codex_update_compatibility.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
+
+test("Desktop runtime discovery binds the packaged binary and rejects ambiguous or redirected layouts", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "asm-runtime-discovery-")));
+  try {
+    for (const [i, layout] of DESKTOP_RUNTIME_RELATIVE_PATHS.entries()) {
+      const app = join(root, `${i}.app`), binary = join(app, layout);
+      mkdirSync(dirname(binary), { recursive: true });
+      writeFileSync(binary, "synthetic executable"); chmodSync(binary, 0o700);
+      assert.equal(resolveDesktopRuntimeExecutable(app), binary);
+      const other = join(app, DESKTOP_RUNTIME_RELATIVE_PATHS[1 - i]);
+      mkdirSync(dirname(other), { recursive: true }); symlinkSync(binary, other);
+      assert.equal(resolveDesktopRuntimeExecutable(app), null);
+    }
+    const app = join(root, "redirect.app"), path = join(app, DESKTOP_RUNTIME_RELATIVE_PATHS[0]);
+    mkdirSync(dirname(path), { recursive: true }); symlinkSync("/usr/bin/true", path);
+    assert.equal(resolveDesktopRuntimeExecutable(app), null);
+    assert.equal(resolveDesktopRuntimeExecutable(join(root, "missing.app")), null);
+  } finally {
+    assert.equal(spawnSync("trash", [root]).status, 0);
+    assert.equal(existsSync(root), false);
+  }
+});
+
+test("extended v34 and timed history are recognized without admitting Desktop cleanup", () => {
+  const databases = compatibleDatabases(GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.databases);
+  const result = evaluateGhostRepairContract({ runtimeVersion: "0.158.0-alpha.2.1", databases });
+  assert.equal(result.schemaProfileIdentifier, "desktop-v34-extended");
+  assert.equal(result.schemaCompatible, true);
+  assert.equal(result.verdict, "candidate_requires_runtime_admission");
+  assert.equal(result.mutationAuthority, "none");
+  assert.equal(GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.runtimeAdmissionGranted, false);
+  assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.153.4", databases }).verdict,
+    "candidate_requires_runtime_admission");
+  databases.threadHistory.tables.thread_items.pop();
+  assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.158.0-alpha.2.1", databases }).verdict, "blocked_schema_drift");
+});
+
+test("same version cannot accept partial or arbitrary Desktop schema additions", () => {
+  const databases = compatibleDatabases(GHOST_REPAIR_DATABASE_CONTRACT_V34.databases);
+  databases.desktop.tables.local_thread_catalog.push("trial_conversation_type");
+  assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.158.0-alpha.2.1", databases }).verdict, "blocked_schema_drift");
+  databases.desktop.tables.automations.push("auto_archive", "unreviewed");
+  assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.158.0-alpha.2.1", databases }).verdict, "blocked_schema_drift");
+});
 
 function compatibleDatabases(contract = GHOST_REPAIR_DATABASE_CONTRACT) {
   return Object.fromEntries(

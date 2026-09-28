@@ -99,6 +99,36 @@ final class CodexCompatibilityDesktopApplicationTests: XCTestCase {
         XCTAssertTrue(CodexCompatibilityInspector.installedDesktopCandidates().contains(URL(fileURLWithPath: "/Applications/ChatGPT.app")))
     }
 
+    func testPackagedRuntimeIdentityUsesBinaryAndDetectsSameVersionReplacement() throws {
+        let app = try packagedFixture()
+        let runtime = try CodexCompatibilityDesktopRuntime.resolve(in: app)
+        XCTAssertTrue(runtime.path.hasSuffix("codex-cli/CodexCLI.app/Contents/MacOS/codex"))
+        let first = try CodexCompatibilityDesktopApplicationReader.read(app)
+        XCTAssertEqual(first.runtimeURL, runtime)
+        let request = CodexCompatibilityRequest(providerExecutable: runtime, codexHome: nil)
+        let installed = try CodexCompatibilityInstallation.read(request, desktopCandidates: [app])
+        XCTAssertTrue(installed.desktop!.files.contains { $0.requestedPath == runtime.path })
+        XCTAssertTrue(installed.desktop!.files.contains { $0.requestedPath.hasSuffix("codex-cli/bin/codex") })
+        try FileManager.default.trashItem(at: runtime, resultingItemURL: nil)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/false"), to: runtime)
+        XCTAssertNotEqual(installed, try CodexCompatibilityInstallation.read(request, desktopCandidates: [app]))
+        XCTAssertThrowsError(try CodexCompatibilityDesktopApplicationReader.read(app))
+    }
+
+    func testRuntimeResolverRejectsAmbiguousLayoutsAndSymlinksWithoutExecutingLauncher() throws {
+        let app = try packagedFixture()
+        let runtime = try CodexCompatibilityDesktopRuntime.resolve(in: app)
+        let legacy = app.appendingPathComponent("Contents/Resources/codex")
+        try FileManager.default.copyItem(at: runtime, to: legacy)
+        XCTAssertThrowsError(try CodexCompatibilityDesktopRuntime.resolve(in: app))
+        try FileManager.default.trashItem(at: legacy, resultingItemURL: nil)
+        try FileManager.default.trashItem(at: runtime, resultingItemURL: nil)
+        try FileManager.default.createSymbolicLink(at: runtime, withDestinationURL: URL(fileURLWithPath: "/usr/bin/true"))
+        XCTAssertThrowsError(try CodexCompatibilityDesktopRuntime.resolve(in: app))
+        try FileManager.default.trashItem(at: runtime, resultingItemURL: nil)
+        XCTAssertThrowsError(try CodexCompatibilityDesktopRuntime.resolve(in: app))
+    }
+
     func testSignatureFailureDoesNotRevokeBuiltInPairButNeverAdmitsUnknownPair() {
         for version in ["0.153.4", "0.999.0"] {
             let result = CodexCompatibilityEvaluator.results(version: version, browsing: true, archive: true,
@@ -118,7 +148,31 @@ final class CodexCompatibilityDesktopApplicationTests: XCTestCase {
         XCTAssertNotNil(report.desktop)
         XCTAssertEqual(report.databaseChecks?.count, 4)
         XCTAssertTrue(report.databaseChecks?.allSatisfy { $0.issue == nil } == true)
-        XCTAssertEqual(report.results.last?.status, .supportedByBuild)
+        XCTAssertNotNil(report.desktopApplication)
+        XCTAssertTrue([.supportedByBuild, .needsBehaviorVerification].contains(report.results.last!.status))
+        XCTAssertEqual(try CodexCompatibilityDesktopProbe.run(profileIdentifier: report.desktopSchemaProfile).status, .passed)
+        let reopened = CodexCompatibilityInspector(reportURL: root.appendingPathComponent("local-report.json"))
+        let review = try await reopened.reviewSavedCompatibility(.init(providerExecutable: URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
+            codexHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")))
+        XCTAssertTrue(review.isCurrent)
+        XCTAssertEqual(review.report?.desktop, report.desktop)
+        print("Installed inspection: provider=\(report.provider.version), desktop=\(report.desktop!.version), profile=\(report.desktopSchemaProfile ?? "none"), cleanup=\(report.results.last!.status)")
+    }
+
+    private func packagedFixture() throws -> URL {
+        let app = try fixture(signed: false)
+        try FileManager.default.trashItem(at: app.appendingPathComponent("Contents/Resources/codex"), resultingItemURL: nil)
+        let package = app.appendingPathComponent("Contents/Resources/codex-cli")
+        let nested = package.appendingPathComponent("CodexCLI.app")
+        try FileManager.default.createDirectory(at: nested.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("bin"), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: nested.appendingPathComponent("Contents/MacOS/codex"))
+        let plist = ["CFBundleIdentifier": "com.openai.codex.cli", "CFBundleExecutable": "codex", "CFBundlePackageType": "APPL"]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: nested.appendingPathComponent("Contents/Info.plist"))
+        try Data("#!/bin/sh\nexit 99\n".utf8).write(to: package.appendingPathComponent("bin/codex"))
+        try sign(nested)
+        try sign(app)
+        return app
     }
 
     private func fixture(signed: Bool = true, appName: String = "Codex.app") throws -> URL {

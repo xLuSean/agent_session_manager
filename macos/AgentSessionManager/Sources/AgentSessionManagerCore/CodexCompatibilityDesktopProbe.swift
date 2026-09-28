@@ -10,7 +10,7 @@ enum CodexCompatibilityDesktopProbe {
     enum Failure: Error { case mismatch, backupMismatch }
 
     static func run(profileIdentifier: String?) throws -> CodexCompatibilityBehaviorResult {
-        guard let profile = CodexGhostRepairDatabaseSchemaProfile.admittedProfiles.first(where: {
+        guard let profile = CodexGhostRepairDatabaseSchemaProfile.inspectionProfiles.first(where: {
             $0.identifier == profileIdentifier
         }) else {
             return .init(feature: .desktopCleanup, status: .notTested,

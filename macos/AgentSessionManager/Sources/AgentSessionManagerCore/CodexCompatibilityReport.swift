@@ -59,6 +59,7 @@ public struct CodexCompatibilityDatabaseCheck: Codable, Equatable, Sendable, Ide
     public let database: CodexGhostRepairSnapshotAnalysisDatabase
     public let issue: CodexCompatibilityDatabaseIssue?
     public var readFailure: CodexCompatibilityReadFailure? = nil
+    public var inspectionOnly: Bool? = nil
     public var id: CodexGhostRepairSnapshotAnalysisDatabase { database }
     public var fileName: String { database.canonicalFile.rawValue }
     public var label: String { issue == nil ? "Structure check passed" : issue == .unavailable ? "Could not check" : "Structure changed" }
@@ -67,7 +68,7 @@ public struct CodexCompatibilityDatabaseCheck: Codable, Equatable, Sendable, Ide
 /// Inspection evidence is deliberately not a mutation permit. In particular,
 /// schema compatibility cannot manufacture behavioral acceptance for Delete.
 public struct CodexCompatibilityReport: Codable, Equatable, Sendable {
-    public static let policyRevision = 4
+    public static let policyRevision = 5
     public let revision: Int
     public let checkedAt: Date
     public let provider: CodexCompatibilityRuntime
@@ -185,6 +186,7 @@ enum CodexCompatibilityEvaluator {
         let desktopPairMatches = source.map {
             $0.ownerRuntimeProfileIdentifier == desktopVersion.map { "desktop-bundled-\($0)" }
                 && $0.databaseSchemaProfileIdentifier == desktopSchemaProfile
+                && !desktopDatabaseChecks.contains { $0.inspectionOnly == true }
         } ?? false
         return [
             result(.browsing, schema: browsing, admitted: true),

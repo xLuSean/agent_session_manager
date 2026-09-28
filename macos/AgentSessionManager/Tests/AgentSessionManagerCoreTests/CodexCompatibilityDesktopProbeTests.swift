@@ -4,7 +4,7 @@ import XCTest
 
 final class CodexCompatibilityDesktopProbeTests: XCTestCase {
     func testEveryKnownProfilePassesMixedCleanupAndRollbackScenarios() throws {
-        for profile in CodexGhostRepairDatabaseSchemaProfile.admittedProfiles {
+        for profile in CodexGhostRepairDatabaseSchemaProfile.inspectionProfiles {
             for scenario in CodexCompatibilityDesktopProbe.Scenario.allCases {
                 XCTAssertNoThrow(try CodexCompatibilityDesktopProbe.verify(profile: profile, scenario: scenario),
                                  "\(profile.identifier): \(scenario)")
@@ -22,7 +22,7 @@ final class CodexCompatibilityDesktopProbeTests: XCTestCase {
     }
 
     func testEveryKnownProfilePassesDiskBackupColdReadAndRollback() throws {
-        for profile in CodexGhostRepairDatabaseSchemaProfile.admittedProfiles {
+        for profile in CodexGhostRepairDatabaseSchemaProfile.inspectionProfiles {
             for scenario in CodexCompatibilityDesktopProbe.Scenario.allCases {
                 XCTAssertNoThrow(try CodexCompatibilityDesktopProbe.verify(profile: profile, scenario: scenario, onDisk: true))
             }
@@ -30,7 +30,7 @@ final class CodexCompatibilityDesktopProbeTests: XCTestCase {
     }
 
     func testCorruptedDiskBackupStopsBeforeCleanup() throws {
-        for profile in CodexGhostRepairDatabaseSchemaProfile.admittedProfiles {
+        for profile in CodexGhostRepairDatabaseSchemaProfile.inspectionProfiles {
             XCTAssertThrowsError(try CodexCompatibilityDesktopProbe.verify(
                 profile: profile, scenario: .mixedSuccess, onDisk: true, corruptBackup: true)) { error in
                 guard case CodexCompatibilityDesktopProbe.Failure.backupMismatch = error else {

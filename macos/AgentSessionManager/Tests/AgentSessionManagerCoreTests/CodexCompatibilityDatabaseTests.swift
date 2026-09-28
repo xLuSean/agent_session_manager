@@ -298,9 +298,55 @@ final class CodexCompatibilityDatabaseTests: XCTestCase {
         XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .indexes)
     }
 
-    private func fixture(_ kind: CodexGhostRepairSnapshotAnalysisDatabase, timelineUnique: String? = nil) throws -> URL {
+    func testExtendedV34IsExactInspectionOnlyAndKeepsProductionAdmissionSeparate() throws {
+        let file = try fixture(.desktop, profile: .desktopV34Extended)
+        let first = try CodexCompatibilityDatabase.metadata(at: file)
+        XCTAssertNil(first.check?.issue)
+        XCTAssertEqual(first.check?.inspectionOnly, true)
+        XCTAssertEqual(first.desktopProfile, "desktop-v34-extended")
+        XCTAssertFalse(CodexGhostRepairDatabaseSchemaProfile.admittedProfiles.contains(.desktopV34Extended))
+        XCTAssertNil(CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(exactRuntimeVersion: "0.156.1"))
+        let result = CodexCompatibilityEvaluator.results(version: "0.156.1", browsing: true, archive: true, restore: true,
+            delete: true, desktopVersion: "0.158.0-alpha.2.1", desktopSchemaProfile: first.desktopProfile,
+            desktopMetadataAvailable: true, desktopDatabaseChecks: [first.check!], desktopIdentityVerified: true)
+        XCTAssertEqual(result.last?.status, .needsBehaviorVerification)
+        try execute(file, "ALTER TABLE automations ADD COLUMN unreviewed TEXT;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+    }
+
+    func testExtendedLayoutDoesNotAcceptPartialAdditionsOrChangedDefinitions() throws {
+        let file = try fixture(.desktop)
+        try execute(file, "ALTER TABLE local_thread_catalog ADD COLUMN trial_conversation_type TEXT;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+        try execute(file, "ALTER TABLE automations ADD COLUMN auto_archive INTEGER NOT NULL DEFAULT 1;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+    }
+
+    func testTimedHistoryColumnsAreRecognizedExactlyAndCannotBorrowOldPairAdmission() throws {
+        let file = try fixture(.threadHistory)
+        try execute(file, "ALTER TABLE thread_items ADD COLUMN started_at_ms INTEGER;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+        try execute(file, "ALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;")
+        let check = try XCTUnwrap(CodexCompatibilityDatabase.metadata(at: file).check)
+        XCTAssertNil(check.issue)
+        XCTAssertEqual(check.inspectionOnly, true)
+        let result = CodexCompatibilityEvaluator.results(version: "0.153.4", browsing: true, archive: true, restore: true,
+            delete: true, desktopVersion: "0.153.4", desktopSchemaProfile: "desktop-v34", desktopMetadataAvailable: true,
+            desktopDatabaseChecks: [check], desktopIdentityVerified: true)
+        XCTAssertEqual(result.last?.status, .needsBehaviorVerification)
+        try execute(file, "ALTER TABLE thread_items ADD COLUMN unreviewed TEXT;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+    }
+
+    func testTimedHistoryRejectsUnsupportedColumnTypes() throws {
+        let file = try fixture(.threadHistory)
+        try execute(file, "ALTER TABLE thread_items ADD COLUMN started_at_ms TEXT; ALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+    }
+
+    private func fixture(_ kind: CodexGhostRepairSnapshotAnalysisDatabase, timelineUnique: String? = nil,
+                         profile: CodexGhostRepairDatabaseSchemaProfile = .desktopV34) throws -> URL {
         let file = root.appendingPathComponent(kind.canonicalFile.rawValue)
-        let profile = CodexGhostRepairDatabaseSchemaProfile.desktopV34
         var sql = "PRAGMA user_version=\(profile.databaseVersions[kind]!);"
         if kind == .desktop {
             for table in profile.desktopTables {

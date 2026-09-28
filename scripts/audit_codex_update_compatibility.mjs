@@ -9,6 +9,7 @@ import {
   evaluateGhostRepairContract,
   overallCompatibilityVerdict,
   parseCodexVersion,
+  resolveDesktopRuntimeExecutable,
   versionsDiverge,
 } from "./lib/codex_update_compatibility.mjs";
 
@@ -63,8 +64,8 @@ function resolveDesktopRuntime() {
   for (const appPath of candidates) {
     if (!existsSync(join(appPath, "Contents/Info.plist"))) continue;
     if (plistValue(appPath, "CFBundleIdentifier") !== "com.openai.codex") continue;
-    const executable = join(appPath, "Contents/Resources/codex");
-    if (!isExecutable(executable)) continue;
+    const executable = resolveDesktopRuntimeExecutable(appPath);
+    if (!executable) continue;
     const runtimeVersion = exactVersion(executable);
     if (!runtimeVersion) continue;
     return {

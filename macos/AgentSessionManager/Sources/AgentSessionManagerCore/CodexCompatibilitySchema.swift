@@ -156,12 +156,10 @@ enum CodexCompatibilityDatabase {
         let schema = try rows("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
         let fingerprint = CodexCompatibilityInspector.hash(try JSONEncoder().encode(versions + schema))
         let kind = CodexGhostRepairSnapshotAnalysisDatabase.allCases.first { $0.canonicalFile.rawValue == url.lastPathComponent }
-        let check = try kind.map { kind in
-            CodexCompatibilityDatabaseCheck(database: kind,
-                issue: try CodexCompatibilityDatabaseContract.issue(database: kind, version: version, rows: rows))
-        }
-        let profileID = kind == .desktop && check?.issue == nil
-            ? CodexGhostRepairDatabaseSchemaProfile.admitted(desktopUserVersion: version)?.identifier : nil
+        let inspection = try kind.map { try CodexCompatibilityDatabaseContract.inspect(database: $0, version: version, rows: rows) }
+        var check = kind.map { CodexCompatibilityDatabaseCheck(database: $0, issue: inspection?.issue) }
+        check?.inspectionOnly = inspection?.inspectionOnly
+        let profileID = inspection?.profile
         return .init(fingerprint: fingerprint, userVersion: version, desktopProfile: profileID, check: check)
     }
 }

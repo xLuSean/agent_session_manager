@@ -1,6 +1,35 @@
 import Foundation
 import Security
 
+/// Resolve the executable itself, never the shell launcher: the isolated probe
+/// copies/reads only this file and must not follow arbitrary package entrypoints.
+enum CodexCompatibilityDesktopRuntime {
+    static let executableRelativePaths = [
+        "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+        "Contents/Resources/codex",
+    ]
+    static let installationRelativePaths = executableRelativePaths + [
+        "Contents/Resources/codex-cli/bin/codex",
+        "Contents/Resources/codex-cli/codex-package.json",
+    ]
+
+    static func resolve(in app: URL) throws -> URL {
+        let candidates = executableRelativePaths.map { app.appendingPathComponent($0) }.filter {
+            (try? $0.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])) != nil
+        }
+        guard candidates.count == 1, let runtime = candidates.first else {
+            throw CodexCompatibilityDesktopApplicationReader.Failure.unavailable
+        }
+        let values = try runtime.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true,
+              runtime.standardizedFileURL.path == runtime.resolvingSymlinksInPath().path,
+              FileManager.default.isExecutableFile(atPath: runtime.path) else {
+            throw CodexCompatibilityDesktopApplicationReader.Failure.unavailable
+        }
+        return runtime
+    }
+}
+
 /// Identifies sealed App contents, not compatibility or publisher trust. A valid
 /// signature (including an ad-hoc signature) is never a cleanup authorization.
 public struct CodexCompatibilityDesktopApplication: Codable, Equatable, Sendable {
@@ -37,7 +66,7 @@ enum CodexCompatibilityDesktopApplicationReader {
         // Check resources and embedded code as well as every main architecture.
         let flags = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode)
         guard SecStaticCodeCheckValidity(code, flags, nil) == errSecSuccess else { throw Failure.invalidSignature }
-        let runtime = app.appendingPathComponent("Contents/Resources/codex")
+        let runtime = try CodexCompatibilityDesktopRuntime.resolve(in: app)
         let main = app.appendingPathComponent("Contents/MacOS/" + executable)
         for file in [runtime, main] {
             let metadata = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
@@ -49,7 +78,7 @@ enum CodexCompatibilityDesktopApplicationReader {
         // The signed main binary seals resource and nested-code identities.
         // Hash all its bytes to cover non-native architectures as well.
         let fingerprint = CodexCompatibilityInspector.hash(try JSONEncoder().encode([
-            "desktop-bundle-v1", app.path, CodexCompatibilityInspector.hash(data), mainSHA, runtimeSHA,
+            "desktop-bundle-v2", app.path, runtime.path, CodexCompatibilityInspector.hash(data), mainSHA, runtimeSHA,
         ]))
         try Task.checkCancellation()
         return .init(application: .init(version: version, build: build, fingerprint: fingerprint),

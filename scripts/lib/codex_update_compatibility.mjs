@@ -1,3 +1,6 @@
+import { accessSync, constants, lstatSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
+
 export const AUDITED_GHOST_REPAIR_RUNTIME = "0.149.0";
 export const AUDITED_GHOST_REPAIR_RUNTIME_PROFILES = Object.freeze({
   "0.149.0": "desktop-v32",
@@ -221,6 +224,43 @@ export const GHOST_REPAIR_DATABASE_CONTRACTS = Object.freeze([
   GHOST_REPAIR_DATABASE_CONTRACT_V34,
 ]);
 
+// Structure/self-test candidate only. Production runtime/source admission and
+// the original v34 contract stay unchanged until complete cleanup acceptance.
+export const GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED = Object.freeze({
+  identifier: "desktop-v34-extended",
+  databases: Object.freeze({
+    ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases,
+    desktop: Object.freeze({
+      ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases.desktop,
+      tables: Object.freeze({
+        ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases.desktop.tables,
+        local_thread_catalog: Object.freeze({ exact: true, columns: Object.freeze([
+          ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases.desktop.tables.local_thread_catalog.columns,
+          "trial_conversation_type",
+        ]) }),
+        automations: Object.freeze({
+          ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases.desktop.tables.automations,
+          columns: Object.freeze([
+            ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases.desktop.tables.automations.columns, "auto_archive",
+          ]),
+        }),
+      }),
+    }),
+    threadHistory: Object.freeze({
+      ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases.threadHistory,
+      tables: Object.freeze({
+        ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases.threadHistory.tables,
+        thread_items: Object.freeze({ exact: true, columns: Object.freeze([
+          ...GHOST_REPAIR_DATABASE_CONTRACT_V34.databases.threadHistory.tables.thread_items.columns,
+          "started_at_ms", "completed_at_ms",
+        ]) }),
+      }),
+    }),
+  }),
+  runtimeAdmissionGranted: false,
+  mutationAuthority: "none",
+});
+
 export function parseCodexVersion(output) {
   const match = /^codex-cli ([0-9][A-Za-z0-9.-]*)\s*$/.exec(output ?? "");
   return match?.[1] ?? null;
@@ -245,10 +285,12 @@ export function evaluateGhostRepairContract({ runtimeVersion, databases }) {
   let inspectionUnavailable = false;
 
   const desktopUserVersion = databases?.desktop?.userVersion;
-  const schemaProfile = GHOST_REPAIR_DATABASE_CONTRACTS.find(
+  const candidates = [...GHOST_REPAIR_DATABASE_CONTRACTS, GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED].filter(
     (candidate) =>
       candidate.databases.desktop.userVersion === desktopUserVersion,
   );
+  const schemaProfile = candidates.find(candidate => Object.entries(candidate.databases.desktop.tables)
+    .every(([name, table]) => columnsEqual(databases.desktop.tables?.[name] ?? [], table.columns))) ?? candidates[0];
   if (!databases?.desktop) {
     inspectionUnavailable = true;
   } else if (!schemaProfile) {
@@ -347,4 +389,22 @@ export function overallCompatibilityVerdict({
     ghostRepairVerdict,
   ].some((value) => value !== "ready_current_build");
   return reviewRequired ? "review_required" : "ready";
+}
+// Match the Swift resolver. The package's bin/codex is a shell launcher;
+// inspecting the actual binary also binds the code that is really executed.
+export const DESKTOP_RUNTIME_RELATIVE_PATHS = Object.freeze([
+  "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+  "Contents/Resources/codex",
+]);
+
+export function resolveDesktopRuntimeExecutable(appPath) {
+  const candidates = DESKTOP_RUNTIME_RELATIVE_PATHS.map(p => join(appPath, p))
+    .filter(p => { try { lstatSync(p); return true; } catch { return false; } });
+  if (candidates.length !== 1) return null;
+  const path = candidates[0];
+  try {
+    if (!lstatSync(path).isFile() || realpathSync(path) !== resolve(path)) return null;
+    accessSync(path, constants.X_OK);
+    return path;
+  } catch { return null; }
 }
