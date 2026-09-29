@@ -9,25 +9,28 @@ struct ContentView: View {
     var body: some View {
         mainSplitView
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let notice = model.compatibilityNotice {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Label(notice.title, systemImage: "info.circle")
-                            .fontWeight(.medium)
-                        Spacer()
-                        Button("Review Compatibility") { reviewCompatibility() }
-                            .accessibilityIdentifier("reviewCodexCompatibility")
+            VStack(spacing: 0) {
+                if let notice = model.compatibilityNotice {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Label(notice.title, systemImage: "info.circle")
+                                .fontWeight(.medium)
+                            Spacer()
+                            Button("Review Compatibility") { reviewCompatibility() }
+                                .accessibilityIdentifier("reviewCodexCompatibility")
+                            if model.isCompatibilityNoticeExpanded {
+                                Button("Later") { model.deferCompatibilityNotice() }
+                            }
+                        }
                         if model.isCompatibilityNoticeExpanded {
-                            Button("Later") { model.deferCompatibilityNotice() }
+                            Text(notice.message).font(.callout).foregroundStyle(.secondary)
                         }
                     }
-                    if model.isCompatibilityNoticeExpanded {
-                        Text(notice.message).font(.callout).foregroundStyle(.secondary)
-                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.accentColor.opacity(0.08))
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.accentColor.opacity(0.08))
+                ghostOverviewBanner
             }
         }
         .background {
@@ -65,12 +68,18 @@ struct ContentView: View {
             }
         }
         .task {
-            model.refreshCompatibilityReport()
+            // reload resolves the actual Codex home, then compares saved
+            // compatibility in its completion path. A pre-load comparison
+            // would mistake the initially unknown home for an installation change.
             await model.reload()
+            model.refreshGhostOverview(force: true)
             hasLoaded = true
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if hasLoaded { model.refreshCompatibilityReport() }
+            if hasLoaded {
+                model.refreshCompatibilityReport()
+                model.refreshGhostOverview()
+            }
         }
         .alert("Codex changed — check compatibility", isPresented: $model.isCompatibilityUpdateAlertPresented) {
             Button("Review Compatibility") { reviewCompatibility() }
@@ -120,7 +129,15 @@ struct ContentView: View {
             ConflictResolutionPreviewSheet(preview: preview)
                 .environmentObject(model)
         }
-        .sheet(isPresented: $model.isReportHistoryPresented) {
+        .sheet(isPresented: $model.isDesktopCleanupFollowUpsPresented, onDismiss: {
+            model.presentQueuedNativeDeleteDesktopCleanup()
+        }) {
+            DesktopCleanupFollowUpsView()
+                .environmentObject(model)
+        }
+        .sheet(isPresented: $model.isReportHistoryPresented, onDismiss: {
+            model.presentQueuedNativeDeleteDesktopCleanup()
+        }) {
             ReportHistoryView()
                 .environmentObject(model)
         }
@@ -132,7 +149,8 @@ struct ContentView: View {
             isPresented: Binding(
                 get: { model.isGhostRepairBulkInventoryPresented },
                 set: { _ = model.setGhostRepairBulkInventoryPresented($0) }
-            )
+            ),
+            onDismiss: { model.refreshGhostOverview(force: true) }
         ) {
             GhostRepairBulkInventorySheet()
                 .environmentObject(model)
@@ -148,6 +166,61 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "Unknown error")
         }
+    }
+
+    private var ghostOverviewBanner: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 12) {
+                if model.ghostOverviewState == .checking {
+                    ProgressView().controlSize(.small)
+                }
+                Label(
+                    model.hasPendingGhostCleanup ? "Desktop cleanup needs attention" : model.ghostOverviewState.title,
+                    systemImage: model.hasPendingGhostCleanup || model.ghostOverviewState.needsAttention
+                        ? "exclamationmark.circle.fill" : "sparkles"
+                )
+                .fontWeight(.medium)
+                .foregroundStyle(model.hasPendingGhostCleanup || model.ghostOverviewState.needsAttention
+                    ? Color.orange : Color.secondary)
+                Spacer(minLength: 8)
+                Button(model.hasPendingGhostCleanup ? "Continue Cleanup…" : "Review Ghosts…") {
+                    Task { await model.presentMainGhostCleanup() }
+                }
+                .disabled(model.ghostOverviewState == .checking)
+                .accessibilityIdentifier("mainGhostCleanup")
+                Menu {
+                    Button("Check Again") { model.refreshGhostOverview(force: true) }
+                        .disabled(model.ghostOverviewState == .checking || model.hasPendingGhostCleanup)
+                    Button("Previous Deletions…") { model.presentDesktopCleanupFollowUps() }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .accessibilityLabel("Desktop cleanup options")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            Group {
+                if model.hasPendingGhostCleanup {
+                    Text("Continue the saved batch to review its progress or result.")
+                } else {
+                    switch model.ghostOverviewState {
+                    case let .checked(summary):
+                        Text("Last checked \(summary.checkedAt.formatted(date: .abbreviated, time: .shortened)). \(summary.eligibleCount) eligible for cleanup; \(summary.uncertainCount) unconfirmed. Across projects and list filters.")
+                    case .unavailable:
+                        Text("Residue may still be present. Choose Review Ghosts to check again and see the reason.")
+                    case .unchecked, .checking:
+                        Text("Checks for records left by deleted Codex conversations. Nothing is deleted automatically.")
+                    }
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.secondary.opacity(0.06))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("mainGhostOverview")
     }
 
     private func reviewCompatibility() {

@@ -10,6 +10,9 @@ export const AUDITED_GHOST_REPAIR_RUNTIME_PROFILES = Object.freeze({
   "0.153.1": "desktop-v34",
   "0.153.2": "desktop-v34",
   "0.153.4": "desktop-v34",
+  "0.156.1": "desktop-v34-extended",
+  "0.157.1": "desktop-v34-extended",
+  "0.158.0-alpha.2.1": "desktop-v34-extended",
 });
 
 // Metadata observed by the explicit read-only update audit on 2026-08-31.
@@ -224,8 +227,8 @@ export const GHOST_REPAIR_DATABASE_CONTRACTS = Object.freeze([
   GHOST_REPAIR_DATABASE_CONTRACT_V34,
 ]);
 
-// Structure/self-test candidate only. Production runtime/source admission and
-// the original v34 contract stay unchanged until complete cleanup acceptance.
+// Exact September schema accepted by the production snapshot and cleanup
+// tests. This metadata-only diagnostic never grants mutation authority.
 export const GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED = Object.freeze({
   identifier: "desktop-v34-extended",
   databases: Object.freeze({
@@ -257,7 +260,7 @@ export const GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED = Object.freeze({
       }),
     }),
   }),
-  runtimeAdmissionGranted: false,
+  runtimeAdmissionGranted: true,
   mutationAuthority: "none",
 });
 

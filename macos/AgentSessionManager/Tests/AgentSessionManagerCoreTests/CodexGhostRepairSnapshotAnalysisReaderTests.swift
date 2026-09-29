@@ -549,6 +549,78 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
         )
     }
 
+    func testCurrentV156RequestBoundPublisherVerifiesV34Exact148Publication()
+        async throws
+    {
+        let exactTargets = (1...148).map {
+            String(format: "00000000-0000-4000-8003-%012x", $0)
+        }
+        let fixture = try await makeFixture(
+            label: #function,
+            desktopUserVersion: 34,
+            sourceProfile: .v156DesktopV34Extended,
+            targets: exactTargets
+        )
+        let request = try makeSnapshotRequest(
+            runtimeVersion: "0.156.1",
+            targetThreadIDs: Array(exactTargets.prefix(2))
+        )
+        let selection = try CodexGhostRepairSnapshotRequestBoundProfileSelection(
+            request: request
+        )
+        XCTAssertEqual(selection.sourceProfile, .v156DesktopV34Extended)
+        XCTAssertEqual(
+            selection.expectedSchemaProfileIdentifier,
+            "desktop-v34-extended"
+        )
+        let publisher = fixture.requestBoundPublisher(selection: selection)
+
+        let acquisition = try await publisher.acquire(
+            snapshotID: snapshotID,
+            request: request
+        )
+
+        XCTAssertEqual(acquisition.snapshotID, snapshotID)
+        XCTAssertTrue(fixture.markerExists(snapshotID))
+        XCTAssertTrue(try fixture.analysisWorkspaceEntries().isEmpty)
+        let identity = try await fixture.resolvedIdentity(snapshotID: snapshotID)
+        let evidence = try await fixture.reader().readBulkCatalog(
+            snapshotReference: identity.snapshotReference
+        )
+        XCTAssertEqual(evidence.readback.targets.count, 148)
+        XCTAssertEqual(
+            evidence.readback.targets.filter {
+                $0.rowContract == .categoryAEligible
+            }.count,
+            74
+        )
+        XCTAssertEqual(
+            evidence.readback.targets.filter {
+                $0.rowContract == .categoryBEligible
+            }.count,
+            74
+        )
+        XCTAssertEqual(
+            evidence.readback.databases.map(\.schemaVersion),
+            [34, 2, 0, 0]
+        )
+    }
+
+    func testV156PublisherRejectsTimedHistoryDriftBeforePublication() async throws {
+        let fixture = try await makeFixture(label: #function, desktopUserVersion: 34,
+                                            sourceProfile: .v156DesktopV34Extended)
+        try BulkShippingCompositionTestFixture.execute(
+            "ALTER TABLE thread_items RENAME COLUMN started_at_ms TO unreviewed_start",
+            at: XCTUnwrap(fixture.sourceFiles[.threadHistory]))
+        let request = try makeSnapshotRequest(runtimeVersion: "0.156.1", targetThreadIDs: targets)
+        let selection = try CodexGhostRepairSnapshotRequestBoundProfileSelection(request: request)
+        do {
+            _ = try await fixture.requestBoundPublisher(selection: selection).acquire(snapshotID: snapshotID, request: request)
+            XCTFail("History drift must stop publication")
+        } catch { }
+        XCTAssertFalse(fixture.markerExists(snapshotID))
+    }
+
     func testM4f28SchemaCrossPairStopsBeforeManifestMarkerAndCannotRetry()
         async throws
     {
@@ -765,6 +837,32 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
                 workspaceFactory: .init(testOwnedParentURL: fixture.workspaceParent)
             ))
         }
+    }
+
+    func testLiveCanonicalCaptureReadsCommittedWALAndRebuildsPrivateSharedMemory() async throws {
+        let fixture = try await makeFixture(label: #function)
+        let desktopURL = try XCTUnwrap(fixture.sourceFiles[.desktop])
+        var writer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(desktopURL.path, &writer), SQLITE_OK)
+        defer { sqlite3_close(writer) }
+        XCTAssertEqual(sqlite3_exec(writer, "PRAGMA journal_mode=WAL; UPDATE local_thread_catalog_metadata SET catalog_revision=123;", nil, nil, nil), SQLITE_OK)
+        let before = try fixture.source.fingerprint()
+        XCTAssertTrue(before.files.first { $0.fileName == "codex-dev.db-wal" }?.exists == true)
+        XCTAssertTrue(before.files.first { $0.fileName == "codex-dev.db-shm" }?.exists == true)
+        let result = try CodexGhostRepairBulkCanonicalQueryOnlyReader.readExactCleanupScope(
+            source: fixture.source, targetThreadIDs: targets,
+            workspaceFactory: .init(testOwnedParentURL: fixture.workspaceParent))
+        XCTAssertEqual(result.authority.catalogRevision, 123)
+        XCTAssertEqual(result.targets.map(\.threadID), targets)
+        XCTAssertEqual(try fixture.source.fingerprint(), before)
+        XCTAssertTrue(try fixture.analysisWorkspaceEntries().isEmpty)
+        XCTAssertEqual(sqlite3_close(writer), SQLITE_OK)
+        writer = nil
+        let cold = try CodexGhostRepairBulkCanonicalQueryOnlyReader.readExactCleanupScope(
+            source: fixture.source, targetThreadIDs: targets,
+            workspaceFactory: .init(testOwnedParentURL: fixture.workspaceParent))
+        XCTAssertEqual(cold.authority.catalogRevision, 123)
+        XCTAssertTrue(try fixture.analysisWorkspaceEntries().isEmpty)
     }
 
     func testInitialWitnessCanonicalReaderReturnsOnlyCatalogIdentities()
@@ -1127,6 +1225,7 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
             .workspaceCleanupUnavailable,
             .publishedAccessPostflightUnavailable,
             .publishedAccessDrift,
+            .canonicalCaptureDrift,
             .unexpected,
         ]
         let points = CodexGhostRepairSnapshotAnalysisFailurePoint.allCases
@@ -1346,6 +1445,10 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
             capacityProbe: M2bCapacityProbe()
         )
         let binding = try await destination.bindPrepared()
+        if sourceProfile == .v156DesktopV34Extended {
+            try BulkShippingCompositionTestFixture.execute("ALTER TABLE local_thread_catalog ADD COLUMN trial_conversation_type TEXT; ALTER TABLE automations ADD COLUMN auto_archive INTEGER NOT NULL DEFAULT 0;", at: codexHome.appendingPathComponent("sqlite/codex-dev.db"))
+            try BulkShippingCompositionTestFixture.execute("ALTER TABLE thread_items ADD COLUMN started_at_ms INTEGER; ALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;", at: codexHome.appendingPathComponent("thread_history_1.sqlite"))
+        }
         let defaultProfile: CodexGhostRepairSnapshotSourceProfile = switch desktopUserVersion {
         case 34: .v152DesktopV34
         case 33: .v151DesktopV33

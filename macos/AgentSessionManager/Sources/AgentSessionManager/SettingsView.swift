@@ -127,23 +127,35 @@ struct CodexCompatibilitySettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Section("Feature compatibility") {
-                    ForEach(report.results) { result in
+                Section("Feature availability") {
+                    ForEach(CodexCompatibilityPresentation.availability(report, isCurrent: model.compatibilityReportIsCurrent)) { result in
                         VStack(alignment: .leading, spacing: 5) {
                             HStack {
                                 Text(result.feature.label).fontWeight(.medium)
                                 Spacer()
-                                Text(currentLabel(report.hasVerifiedBehavior(for: result.feature) ? "Verified on this device" : result.status.label))
+                                Text(currentLabel(result.label))
                                     .foregroundStyle(isUpdating ? Color.secondary : model.compatibilityReportIsCurrent
-                                        && (result.status == .supportedByBuild || report.hasVerifiedBehavior(for: result.feature))
+                                        && result.isAvailable
                                         ? Color.green : Color.orange)
                             }
-                            Text(report.hasVerifiedBehavior(for: result.feature)
-                                 ? "Isolated tests passed for this installation. Each operation still checks the current environment and selected sessions."
-                                 : result.detail).font(.caption).foregroundStyle(.secondary)
+                            Text(result.detail).font(.caption).foregroundStyle(.secondary)
+                            if let nextStep = result.nextStep {
+                                Text(nextStep).font(.caption)
+                            }
                         }
                     }
-                    Text("Complete Delete requires both official deletion and Desktop cleanup support. An issue with one feature does not disable browsing.")
+                    Text("Test results are listed separately below. Complete Delete requires both official deletion and Desktop cleanup support; passing the SQL self-test does not enable a new Desktop version.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Interface checks") {
+                    ForEach(CodexCompatibilityPresentation.interfaceChecks(report)) { check in
+                        LabeledContent(check.feature.label) {
+                            Text(currentLabel(check.label))
+                                .foregroundStyle(isUpdating ? Color.secondary :
+                                    model.compatibilityReportIsCurrent && check.passed ? Color.green : Color.orange)
+                        }
+                    }
+                    Text("These checks compare required request and response definitions. Isolated behavior tests are listed separately.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let checks = report.databaseChecks {
@@ -326,7 +338,7 @@ private struct GeneralSettingsView: View {
                         .foregroundStyle(.orange)
                 }
                 Text(
-                    "Default off. Permanent Delete first uses Codex App Server to delete the canonical session and verifies official absence. This screen then classifies any Codex Desktop residue, freezes the complete batch, and requires one whole-batch confirmation before one atomic Ghost Delete. It never asks you to repair sessions one by one."
+                    "This Settings shortcut is off by default. The main window checks for Desktop residue automatically; Review Ghosts opens the same batch cleanup without changing this preference. Cleanup still requires your selection, confirmation, a verified backup, and Codex to be closed."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

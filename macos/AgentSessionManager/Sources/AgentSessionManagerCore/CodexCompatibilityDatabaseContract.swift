@@ -28,7 +28,8 @@ enum CodexCompatibilityDatabaseContract {
         if database == .threadHistory && issue == nil {
             extendedHistory = try Array(rows("PRAGMA table_xinfo('thread_items')").compactMap { $0[1] }.suffix(timingColumns.count)) == timingColumns
         }
-        return (issue, nil, extendedHistory)
+        return (issue, database == .threadHistory && issue == nil
+                ? (extendedHistory ? "thread-history-timed" : "thread-history-legacy") : nil, false)
     }
 
     private static func validate(database: CodexGhostRepairSnapshotAnalysisDatabase, version: Int32,

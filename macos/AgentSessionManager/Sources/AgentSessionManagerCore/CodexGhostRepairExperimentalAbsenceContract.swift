@@ -342,7 +342,10 @@ struct CodexGhostRepairReadOnlySourceProfile: Hashable, Sendable {
                 .v1534SourceLayoutIdentifier
             && ownerRuntimeProfileIdentifier == "desktop-bundled-0.153.4"
             && databaseSchemaProfileIdentifier == "desktop-v34"
-        guard (isV151 || isV152 || isV153 || isV1534),
+        let isV156 = identifier == CodexGhostRepairPackagedReadOnlyProfileCatalog.v156SourceLayoutIdentifier
+            && ownerRuntimeProfileIdentifier == "desktop-bundled-0.158.0-alpha.2.1"
+            && databaseSchemaProfileIdentifier == "desktop-v34-extended"
+        guard (isV151 || isV152 || isV153 || isV1534 || isV156),
               layoutSHA256
                 == "75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85",
               members == Self.v151Members else {
@@ -440,7 +443,12 @@ struct CodexGhostRepairVersionSpecificReadOnlyRegistry: Sendable {
                 == "desktop-bundled-0.153.4"
                 && admission.compatibilityFixtureSHA256
                     == "7d26dc10bca3d2063727cae204c90ea84d86ca2ba1470cf62dc6ecd5ba0fc353"
-            guard (isV151 || isV152 || isV153 || isV1534),
+            let isV156 = admission.source.ownerRuntimeProfileIdentifier == "desktop-bundled-0.158.0-alpha.2.1"
+                && admission.compatibilityFixtureSHA256 == "ba111c7f97d02edcc5213050cd6151a2bb70cb3a527a150b9cec6bb6994f749d"
+            let isV157 = admission.runtime.identifier == "provider-0.157.1"
+                && admission.source.ownerRuntimeProfileIdentifier == "desktop-bundled-0.158.0-alpha.2.1"
+                && admission.compatibilityFixtureSHA256 == "c8527c2bf8736d076a7ba6c3bfc878667e2ca80c82c2f90fe91c2d8484f6b640"
+            guard (isV151 || isV152 || isV153 || isV1534 || isV156 || isV157),
                   indexed.updateValue(
                       admission,
                       forKey: admission.runtime.runtimeVersion
@@ -592,7 +600,32 @@ struct CodexGhostRepairVersionSpecificReadOnlyRegistry: Sendable {
                     "75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85",
                 members: CodexGhostRepairReadOnlySourceProfile.v151Members
             )
+            let runtimeV156_0 = try CodexGhostRepairReadOnlyRuntimeProfile(
+                identifier: "desktop-bundled-0.158.0-alpha.2.1", runtimeVersion: "0.158.0-alpha.2.1",
+                executableSHA256: "3e11ccc743e8198a5ef84fb57c89941d845b0ea0302485ed1fbac2f0821aca5a",
+                generatedProtocolSHA256: "9c810634df8453cdda93243830ae05d1d3b433ce5e39fe0605d4a1a447fc90c5"
+            )
+            let runtimeV156_1 = try CodexGhostRepairReadOnlyRuntimeProfile(
+                identifier: "provider-0.156.1", runtimeVersion: "0.156.1",
+                executableSHA256: "0196e89fe5a7598f816ee54232c3d7c26d75e502ab5cfe2c9240e81d90f7255a",
+                generatedProtocolSHA256: "9c810634df8453cdda93243830ae05d1d3b433ce5e39fe0605d4a1a447fc90c5"
+            )
+            let runtimeV157 = try CodexGhostRepairReadOnlyRuntimeProfile(
+                identifier: "provider-0.157.1", runtimeVersion: "0.157.1",
+                executableSHA256: "27ceb5f9b957b43a519efe4eaa3816a0bffb0a531a2c89af18840c0a3c016a7d",
+                generatedProtocolSHA256: "9c810634df8453cdda93243830ae05d1d3b433ce5e39fe0605d4a1a447fc90c5"
+            )
+            let sourceV156 = try CodexGhostRepairReadOnlySourceProfile(
+                identifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v156SourceLayoutIdentifier,
+                ownerRuntimeProfileIdentifier: "desktop-bundled-0.158.0-alpha.2.1",
+                databaseSchemaProfileIdentifier: "desktop-v34-extended",
+                layoutSHA256: "75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85",
+                members: CodexGhostRepairReadOnlySourceProfile.v151Members
+            )
             return try .init(admissions: [
+                .init(runtime: runtimeV157, source: sourceV156, compatibilityFixtureSHA256: "c8527c2bf8736d076a7ba6c3bfc878667e2ca80c82c2f90fe91c2d8484f6b640"),
+                .init(runtime: runtimeV156_0, source: sourceV156, compatibilityFixtureSHA256: "ba111c7f97d02edcc5213050cd6151a2bb70cb3a527a150b9cec6bb6994f749d"),
+                .init(runtime: runtimeV156_1, source: sourceV156, compatibilityFixtureSHA256: "ba111c7f97d02edcc5213050cd6151a2bb70cb3a527a150b9cec6bb6994f749d"),
                 .init(
                     runtime: desktopV151,
                     source: sourceV151,
@@ -731,6 +764,9 @@ enum CodexGhostRepairPackagedReadOnlyProfileCatalog {
     static let v1534SourceLayoutIdentifier =
         "codex-cli-0.153.4-desktop-v34-20-member-v1"
 
+    static let v156SourceLayoutIdentifier =
+        "codex-cli-0.158.0-alpha.2.1-desktop-v34-extended-20-member-v1"
+
     static func supportsObservationRuntime(_ runtimeVersion: String) -> Bool {
         CodexGhostRepairSnapshotSourceProfile.v149DesktopV32.supports(
             runtimeVersion: runtimeVersion
@@ -739,6 +775,8 @@ enum CodexGhostRepairPackagedReadOnlyProfileCatalog {
         ) || CodexGhostRepairSnapshotSourceProfile.v152DesktopV34.supports(
             runtimeVersion: runtimeVersion
         ) || CodexGhostRepairSnapshotSourceProfile.v153DesktopV34.supports(
+            runtimeVersion: runtimeVersion
+        ) || CodexGhostRepairSnapshotSourceProfile.v156DesktopV34Extended.supports(
             runtimeVersion: runtimeVersion
         ) || CodexGhostRepairSnapshotSourceProfile.v1534DesktopV34.supports(
             runtimeVersion: runtimeVersion
@@ -774,6 +812,10 @@ enum CodexGhostRepairPackagedReadOnlyProfileCatalog {
             return sourceLayoutIdentifier == v153SourceLayoutIdentifier
                 && schema.identifier == "desktop-v34"
         }
+        if ["0.156.1", "0.157.1", "0.158.0-alpha.2.1"].contains(runtimeVersion) {
+            return sourceLayoutIdentifier == v156SourceLayoutIdentifier
+                && schema.identifier == "desktop-v34-extended"
+        }
         return runtimeVersion == "0.153.4"
             && sourceLayoutIdentifier == v1534SourceLayoutIdentifier
             && schema.identifier == "desktop-v34"
@@ -802,6 +844,8 @@ enum CodexGhostRepairPackagedReadOnlyProfileCatalog {
             return schema.identifier == "desktop-v34"
         case v1534SourceLayoutIdentifier:
             return schema.identifier == "desktop-v34"
+        case v156SourceLayoutIdentifier:
+            return schema.identifier == "desktop-v34-extended"
         default:
             return false
         }

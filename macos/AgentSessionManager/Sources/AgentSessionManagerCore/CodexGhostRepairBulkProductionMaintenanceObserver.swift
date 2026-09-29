@@ -36,7 +36,7 @@ actor CodexGhostRepairBulkProductionMaintenanceObserver:
                 .production(),
             fingerprintReader: { try source.fingerprint() },
             authorityReader: { resolution in
-                try Self.readAuthority(resolution: resolution)
+                try Self.readAuthority(source: source, resolution: resolution)
             },
             sourceAdmission: { $0.acceptsLiveCodexRoot },
             nowMilliseconds: {
@@ -100,6 +100,8 @@ actor CodexGhostRepairBulkProductionMaintenanceObserver:
         profile: CodexGhostRepairSnapshotSourceProfile
     ) -> String {
         switch profile.identifier {
+        case CodexGhostRepairSnapshotSourceProfile.v156DesktopV34Extended.identifier:
+            "0.156.1"
         case CodexGhostRepairSnapshotSourceProfile.v1534DesktopV34.identifier:
             "0.153.4"
         case CodexGhostRepairSnapshotSourceProfile.v153DesktopV34.identifier:
@@ -113,57 +115,20 @@ actor CodexGhostRepairBulkProductionMaintenanceObserver:
         }
     }
 
-    private static func readAuthority(
+    static func readAuthority(
+        source: CodexGhostRepairSnapshotCanonicalSource,
         resolution: CodexGhostRepairBulkProductionBundle.Resolution
     ) throws -> CodexGhostRepairSnapshotAnalysisAuthorityEvidence {
-        let desktop = try CodexGhostRepairProductionSQLite(
-            url: resolution.databaseURL(for: .desktop),
-            readOnly: true
-        )
-        defer { desktop.close() }
-        let metadataRows = try desktop.query(
-            "SELECT * FROM local_thread_catalog_metadata WHERE id = 1",
-            maximumRows: 2
-        )
-        let syncRows = try desktop.query(
-            "SELECT * FROM local_thread_catalog_sync_state "
-                + "WHERE host_id = 'local'",
-            maximumRows: 2
-        )
-        guard metadataRows.count == 1,
-              syncRows.count == 1,
-              case let .integer(revision)? = metadataRows[0].value(
-                  named: "catalog_revision"
-              ),
-              case let .integer(sequence)? = syncRows[0].value(
-                  named: "observation_sequence"
-              ) else {
-            throw CodexGhostRepairError.invalidDatabaseContract(
-                "Bulk authority rows are unavailable."
-            )
+        // SQLite read-only connections can create WAL/SHM coordination files.
+        // Read a guarded private capture so observing authority cannot change
+        // the very source fingerprint used by the maintenance window.
+        guard source.profile.identifier == resolution.sourceLayoutIdentifier else {
+            throw CodexGhostRepairError.authorityDrift
         }
-        let metadata = try metadataRows[0].privacyPreserving(
-            cleartextFields: CodexGhostRepairPrivacyContract.metadata
-        )
-        let sync = try syncRows[0].privacyPreserving(
-            cleartextFields: CodexGhostRepairPrivacyContract.localSync
-        )
-        let watermark: Double?
-        switch sync.value(named: "watermark_updated_at") {
-        case let .integer(value): watermark = Double(value)
-        case let .real(value): watermark = value
-        case .null: watermark = nil
-        default:
-            throw CodexGhostRepairError.invalidDatabaseContract(
-                "Bulk authority watermark is invalid."
-            )
-        }
-        return CodexGhostRepairSnapshotAnalysisAuthorityEvidence(
-            catalogRevision: revision,
-            observationSequence: sequence,
-            watermarkUpdatedAt: watermark,
-            metadataRowDigest: try CodexGhostRepairHasher.hash(metadata),
-            localSyncRowDigest: try CodexGhostRepairHasher.hash(sync)
-        )
+        return try CodexGhostRepairBulkCanonicalQueryOnlyReader.readExactCleanupScope(
+            source: source,
+            targetThreadIDs: resolution.selectedThreadIDs,
+            workspaceFactory: .production()
+        ).authority
     }
 }

@@ -406,6 +406,9 @@ test("read-only update runner removes inherited live-acceptance opt-ins before a
     "ASM_COMPATIBILITY_ACCEPTANCE",
     "ASM_COMPATIBILITY_ACCEPTANCE_EXECUTABLE",
     "ASM_COMPATIBILITY_LOCAL_INSPECTION",
+    "ASM_INSTALLED_CLEANUP_READ",
+    "ASM_INSTALLED_CLEANUP_SCAN",
+    "ASM_INSTALLED_CLEANUP_THREAD_ID",
   ]) {
     const unset = new RegExp(`^unset [^\\n]*\\b${name}\\b`, "m").exec(source);
     assert.ok(unset, `${name} must be explicitly unset`);

@@ -14,15 +14,20 @@ struct SessionTableView: View {
             deletedHistoryBar
             filteredSelectionBar
             HStack {
-                if model.isCalculatingSessionFileSizes {
+                if model.isLoading || model.isCalculatingSessionFileSizes {
                     ProgressView().controlSize(.small)
-                    Text("Updating conversation sizes…").font(.caption).foregroundStyle(.secondary)
-                } else if model.unavailableConversationSizeCount > 0 {
-                    Text("\(model.unavailableConversationSizeCount) sizes unavailable")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .help("Hover over a — in the Size column for the reason. Unmeasured sessions appear after measured sizes, not as zero.")
                 }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("All sessions: \(model.allConversationFileSizeLabel)")
+                        .font(.callout).fontWeight(.medium).monospacedDigit()
+                        .accessibilityIdentifier("allConversationFileSize")
+                    if let coverage = model.allConversationFileSizeCoverage {
+                        Text(coverage).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .help(model.allConversationFileSizeHelp)
+                .accessibilityElement(children: .combine)
+                .accessibilityHint(model.allConversationFileSizeHelp)
                 Spacer()
                 Picker("Sort", selection: $model.sessionListSort) {
                     ForEach(SessionListSort.allCases, id: \.self) { order in
@@ -274,7 +279,10 @@ struct SessionTableView: View {
                     ? "A session refresh is already in progress."
                     : "Refresh the current session data source"
             ) {
-                Task { await model.reload() }
+                Task {
+                    await model.reload()
+                    model.refreshGhostOverview(force: true)
+                }
             }
 
             HoverHelpButton(

@@ -90,6 +90,16 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
     public func reviewSavedCompatibility(_ request: CodexCompatibilityRequest) throws -> CodexCompatibilityReview {
         let state = try installation(request)
         let reports = try savedReports()
+        // The provider learns the authoritative home from its first successful
+        // inventory. Unknown is not a changed location, and must not reuse a
+        // saved location as authority. Keep evidence unverified until resolved.
+        if request.codexHome == nil,
+           reports.contains(where: { $0.installation?.codexHome != nil }) {
+            return .init(report: reports.first, isCurrent: false,
+                         environmentFingerprint: state.fingerprint,
+                         providerVersion: nil, desktopVersion: nil,
+                         sourceHomeUnavailable: true)
+        }
         if let report = reports.first(where: { $0.installation == state }) {
             return .init(report: report, isCurrent: true, environmentFingerprint: report.environmentFingerprint,
                          providerVersion: report.provider.version, desktopVersion: report.desktop?.version)

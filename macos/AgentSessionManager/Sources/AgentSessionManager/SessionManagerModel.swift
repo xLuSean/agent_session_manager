@@ -3,6 +3,92 @@ import Foundation
 import OSLog
 import SwiftUI
 
+/// A global, display-only observation. It never supplies a cleanup selection
+/// or confirmation, and a scoped Delete follow-up cannot replace it.
+struct GhostOverviewSummary: Equatable {
+    let confirmedCount: Int
+    let eligibleCount: Int
+    let uncertainCount: Int
+    let checkedAt: Date
+
+    init(inventory: CodexGhostRepairBulkInventory, checkedAt: Date = Date()) {
+        confirmedCount = inventory.confirmedGhostCount
+        eligibleCount = inventory.eligibleItemCount
+        uncertainCount = inventory.items.filter {
+            $0.disposition == .unconfirmed && $0.retentionExplanation == nil
+        }.count
+        self.checkedAt = checkedAt
+    }
+}
+
+enum GhostOverviewState: Equatable {
+    case unchecked
+    case checking
+    case checked(GhostOverviewSummary)
+    case unavailable
+
+    var title: String {
+        switch self {
+        case .unchecked: "Desktop residue has not been checked"
+        case .checking: "Checking for Desktop residue…"
+        case let .checked(summary) where summary.confirmedCount > 0:
+            "\(summary.confirmedCount) Desktop ghost\(summary.confirmedCount == 1 ? "" : "s") found"
+        case let .checked(summary) where summary.uncertainCount > 0:
+            "Desktop residue needs checking"
+        case .checked: "No Desktop ghosts found"
+        case .unavailable: "Could not check Desktop residue"
+        }
+    }
+
+    var needsAttention: Bool {
+        switch self {
+        case let .checked(summary): summary.confirmedCount > 0 || summary.uncertainCount > 0
+        case .unavailable: true
+        case .unchecked, .checking: false
+        }
+    }
+}
+
+struct DesktopCleanupFollowUp: Identifiable {
+    let report: OperationHistoryEntry
+    let status: CodexDesktopCleanupStatusOutcome
+    var id: UUID { report.reportID }
+    var deletedItems: [OperationHistoryItem] {
+        report.items.filter { $0.outcome == .success && $0.observedNativeState == .absent }
+    }
+    var title: String { deletedItems.first?.sessionTitle.nonEmptyCleanupTitle ?? "Deleted conversation" }
+    var isVerified: Bool {
+        if case .status(.verified) = status { return true }
+        return false
+    }
+    var canContinue: Bool {
+        if case .status = status { return !isVerified }
+        return false
+    }
+    var statusText: String {
+        switch status {
+        case .status(.pending): "Cleanup not yet checked"
+        case .status(.prepared): "Ready to continue"
+        case .status(.recoveryRequired), .status(.outcomeUnknown): "Result needs checking"
+        case .status(.closedBeforeAttempt): "Cleanup was not started"
+        case .status(.terminalNotVerified): "Cleanup needs attention"
+        case .status(.verified): "Cleanup completed"
+        case .notFound: "Cleanup record unavailable"
+        case .unavailable: "Could not read cleanup status"
+        }
+    }
+}
+
+struct DesktopCleanupFollowUpPage {
+    let entries: [DesktopCleanupFollowUp]
+    let nextCursor: OperationHistoryCursor?
+}
+
+private extension String {
+    var nonEmptyCleanupTitle: String? { isEmpty ? nil : self }
+}
+
+
 struct NativeDeleteSubmissionFailure: Equatable {
     let title: String
     let message: String
@@ -569,6 +655,11 @@ final class SessionManagerModel: ObservableObject {
     @Published var checkpointDisposition: CheckpointCommitDisposition?
     @Published var stateStoreURL: URL?
     @Published var isReportHistoryPresented = false
+    @Published var isDesktopCleanupFollowUpsPresented = false
+    @Published private(set) var ghostOverviewState: GhostOverviewState = .unchecked
+    private var ghostOverviewTask: Task<Void, Never>?
+    private var ghostOverviewLastAttempt: Date?
+    private var isMainGhostCleanupEnabled = false
     @Published var isMaintenancePresented = false
     @Published var isGhostRepairSnapshotReadbackPresented = false
     @Published var isGhostRepairSnapshotCleanupPresented = false
@@ -640,6 +731,7 @@ final class SessionManagerModel: ObservableObject {
     var isGhostRepairBulkWorkflowEnabled: Bool {
         isGhostRepairBulkReconciliationEnabled
             || nativeDeleteAutomaticCleanupReportID != nil
+            || isMainGhostCleanupEnabled
     }
     @Published private(set) var ghostRepairBulkSelectedRecoveryOperationIdentity:
         CodexGhostRepairBulkRecoveryOperationIdentity?
@@ -1117,6 +1209,44 @@ final class SessionManagerModel: ObservableObject {
 
     var unavailableConversationSizeCount: Int {
         filteredSessions.filter { $0.system == .codex && sessionFileSizeIssues[$0.nativeID] != nil }.count
+    }
+
+    var allConversationFileSizeSummary: (bytes: Int64?, measured: Int, total: Int) {
+        // Sum the loaded inventory, not the filtered table or historical sizes.
+        // Multiple presentations of the same native conversation count once.
+        let ids = Set(sessionRows.filter { $0.system == .codex }.map(\.nativeID))
+        guard sessionFileSizeHomeURL != nil else { return (nil, 0, ids.count) }
+        var total: Int64 = 0
+        var measured = 0
+        for id in ids {
+            guard sessionFileSizeIssues[id] == nil,
+                  let bytes = sessionFileSizes[id], bytes >= 0 else { continue }
+            let sum = total.addingReportingOverflow(bytes)
+            guard !sum.overflow else { return (nil, 0, ids.count) }
+            total = sum.partialValue
+            measured += 1
+        }
+        return (measured > 0 || ids.isEmpty ? total : nil, measured, ids.count)
+    }
+
+    var allConversationFileSizeLabel: String {
+        guard !isLoading, !isCalculatingSessionFileSizes else { return "Calculating…" }
+        let summary = allConversationFileSizeSummary
+        guard let bytes = summary.bytes else { return "Unavailable" }
+        let size = bytes == 0 ? "0 B" : ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        return summary.measured == summary.total ? size : "At least \(size)"
+    }
+
+    var allConversationFileSizeCoverage: String? {
+        guard !isLoading, !isCalculatingSessionFileSizes else { return nil }
+        let summary = allConversationFileSizeSummary
+        guard summary.measured < summary.total else { return nil }
+        return "\(summary.measured) of \(summary.total) sizes measured"
+    }
+
+    var allConversationFileSizeHelp: String {
+        "All Codex conversations in the latest loaded inventory, across all projects and states, including current files for Deleted records. Search, filters and selection do not change this total. Each session ID is counted once; unmeasured sizes are not zero. "
+            + conversationFileSizeHelp
     }
 
     @discardableResult
@@ -3164,15 +3294,16 @@ final class SessionManagerModel: ObservableObject {
     }
 
     func nativeDeleteDesktopCleanupBlockedReason(
-        report: NativeDeleteReport
+        report: NativeDeleteReport,
+        requiresPresentedReport: Bool = true
     ) -> String? {
-        guard isGhostRepairBulkWorkflowEnabled else {
+        guard isGhostRepairBulkWorkflowEnabled || !requiresPresentedReport else {
             return "Enable Bulk Ghost Delete in Settings before continuing."
         }
         guard nativeDeleteDesktopCleanupCoordinator.capabilities.available else {
             return "Desktop cleanup linkage is unavailable in this build."
         }
-        guard report.id == latestNativeDeleteReport?.id else {
+        guard !requiresPresentedReport || report.id == latestNativeDeleteReport?.id else {
             return "This is not the current canonical Delete report."
         }
         let successfulIDs = report.items
@@ -3203,6 +3334,75 @@ final class SessionManagerModel: ObservableObject {
             return "Wait for the current Bulk Ghost Delete preparation step to finish."
         }
         return nil
+    }
+
+    /// The main entry remains available after restart and does not depend on
+    /// the session selection or a successful live Codex inventory refresh.
+    func presentDesktopCleanupFollowUps() {
+        if nativeDeleteDesktopCleanupContext != nil {
+            presentGhostRepairBulkInventory()
+        } else {
+            isDesktopCleanupFollowUpsPresented = true
+        }
+    }
+
+    func desktopCleanupFollowUps(cursor: OperationHistoryCursor? = nil) async throws -> DesktopCleanupFollowUpPage {
+        let store = try stateStoreFactory()
+        let page: OperationHistoryPage
+        do {
+            page = try store.operationHistory(.init(provider: .codex, operation: .permanentlyDelete,
+                                                   cursor: cursor, limit: 50))
+            store.close()
+        } catch {
+            store.close()
+            throw error
+        }
+        var entries: [DesktopCleanupFollowUp] = []
+        for report in page.entries where report.items.contains(where: {
+            $0.outcome == .success && $0.observedNativeState == .absent
+        }) {
+            let status = await nativeDeleteDesktopCleanupCoordinator.readStatus(reportID: report.reportID)
+            entries.append(.init(report: report, status: status))
+        }
+        return .init(entries: entries, nextCursor: page.nextCursor)
+    }
+
+    /// Reopens only a retained canonical report. This queues the existing
+    /// cleanup review; it never creates a Delete preview or calls Delete.
+    func queueRetainedNativeDeleteDesktopCleanup(reportID: UUID) throws {
+        let store = try stateStoreFactory()
+        defer { store.close() }
+        guard let stored = try store.operationReport(id: reportID),
+              stored.provider == .codex, stored.operation == .permanentlyDelete,
+              let preview = try store.operationPreview(id: stored.previewID),
+              preview.provider == .codex, preview.operation == .permanentlyDelete,
+              preview.status == .consumed,
+              stored.items.count == preview.items.count,
+              Set(stored.items.map(\.managerKey)) == Set(preview.items.map(\.managerKey)),
+              Set(preview.items.map(\.managerKey)).count == preview.items.count else {
+            throw SessionManagerError.unsupportedOperation("The retained canonical Delete report is unavailable or changed.")
+        }
+        let items = try stored.items.map { result -> NativeDeleteReportItem in
+            guard let item = preview.items.first(where: { $0.managerKey == result.managerKey }) else {
+                throw PersistentStateError.previewItemSetMismatch
+            }
+            return .init(managerKey: item.managerKey, nativeSessionID: item.nativeSessionID,
+                         title: item.expectedTitle, projectName: nil, workingDirectory: item.expectedWorkingDirectory,
+                         outcome: result.outcome, observedNativeState: result.observedNativeState,
+                         errorCode: result.errorCode, message: result.errorMessage)
+        }
+        let report = NativeDeleteReport(id: stored.id, previewID: stored.previewID,
+            outcome: stored.outcome, completedAt: stored.completedAt, items: items, recoveredAfterInterruption: false)
+        if let reason = nativeDeleteDesktopCleanupBlockedReason(report: report, requiresPresentedReport: false) {
+            throw SessionManagerError.unsupportedOperation(reason)
+        }
+        nativeDeleteAutomaticCleanupReportID = report.id
+        nativeDeleteDesktopCleanupState = .queued(.init(
+            canonicalDeleteReportID: report.id,
+            expectedNativeSessionIDs: items.filter { $0.outcome == .success && $0.observedNativeState == .absent }
+                .map(\.nativeSessionID).sorted(),
+            nativeDeleteItemCount: items.count
+        ))
     }
 
     func queueNativeDeleteDesktopCleanup(report: NativeDeleteReport) {
@@ -3267,13 +3467,13 @@ final class SessionManagerModel: ObservableObject {
         case .idle:
             return nil
         case .queued, .reviewing, .pending:
-            return "Desktop cleanup pending"
+            return "Conversation deleted · cleanup pending"
         case .inventoryReady:
-            return "Exact Desktop cleanup scope ready"
+            return "Ready to finish cleanup"
         case .inventoryBlocked:
-            return "Desktop cleanup scope blocked"
+            return "Cleanup needs attention"
         case .binding:
-            return "Recording exact cleanup linkage"
+            return "Saving cleanup progress"
         case .bindingRecoveryRequired:
             return "Cleanup linkage requires readback"
         case let .status(_, status):
@@ -3302,36 +3502,36 @@ final class SessionManagerModel: ObservableObject {
         let prefix: String
         guard let context = nativeDeleteDesktopCleanupContext else { return nil }
         if nativeDeleteDesktopAbsenceVerifiedReportID == context.canonicalDeleteReportID {
-            return "The exact \(context.expectedNativeSessionIDs.count) canonically deleted IDs had no Desktop catalog, automation, or side-reference residue at the post-Delete check. No Desktop mutation was needed."
+            return "No remaining Desktop records were found for these \(context.expectedNativeSessionIDs.count) deleted conversations. Nothing else needs to be cleared."
         }
         if context.isPartialNativeDeleteSuccess {
             prefix = "The native Delete report recorded \(context.expectedNativeSessionIDs.count) successful items out of \(context.nativeDeleteItemCount). This follow-up keeps only that exact successful scope; the other report outcomes remain unchanged. "
         } else {
-            prefix = "This follow-up keeps all \(context.expectedNativeSessionIDs.count) canonically deleted session IDs as one exact scope. "
+            prefix = "\(context.expectedNativeSessionIDs.count) conversations deleted. "
         }
         switch nativeDeleteDesktopCleanupState {
         case .idle:
             return nil
         case .queued:
-            return prefix + "Desktop cleanup is queued. The official Delete request will not be resent."
+            return prefix + "Ready to check their remaining Desktop records."
         case .reviewing:
-            return prefix + "Manager-owned Delete evidence is being checked."
+            return prefix + "Checking the saved deletion result."
         case .pending:
-            return prefix + "Checking Desktop residue for the exact successful IDs."
+            return prefix + "Checking their remaining Desktop records."
         case .inventoryReady:
-            return prefix + "Every requested ID is either already clear or an eligible classified ghost. Preparing the complete cleanup plan."
+            return prefix + "The check is complete. Continue below to finish cleanup."
         case let .inventoryBlocked(_, _, _, message),
              let .bindingRecoveryRequired(_, _, _, message),
              let .unavailable(_, message):
             return prefix + message
         case .binding:
-            return prefix + "The prepared operation is being bound before Execute can be exposed."
+            return prefix + "Saving cleanup progress before continuing."
         case let .status(_, status):
             switch status {
             case .pending:
-                return prefix + "No prepared Bulk operation is bound yet."
+                return prefix + "Cleanup is waiting to be prepared."
             case .prepared:
-                return prefix + "The exact prepared operation is durably linked and may use its existing Execute step."
+                return prefix + "Keep ASM open, quit Codex, then continue below."
             case let .recoveryRequired(_, _, _, message):
                 return prefix + message
             case .closedBeforeAttempt:
@@ -3345,7 +3545,7 @@ final class SessionManagerModel: ObservableObject {
                     timeIntervalSince1970:
                         TimeInterval(completedAtMilliseconds) / 1_000
                 )
-                return prefix + "The exact bound terminal record verified cleanup at \(date.formatted()). This is historical operation evidence, not a current global absence check."
+                return prefix + "Desktop cleanup was verified at \(date.formatted()). Reopen Codex to confirm these conversations stay gone."
             }
         }
     }
@@ -3370,7 +3570,7 @@ final class SessionManagerModel: ObservableObject {
                     nativeSessionID: $0,
                     state: .pending,
                     category: nil,
-                    message: "Awaiting exact manager-owned cleanup evidence."
+                    message: "Checking the saved deletion result."
                 )
             }
         case let .pending(_, handoff):
@@ -3379,7 +3579,7 @@ final class SessionManagerModel: ObservableObject {
                     nativeSessionID: $0.nativeSessionID,
                     state: .pending,
                     category: nil,
-                    message: "Awaiting Bulk inventory classification."
+                    message: "Checking remaining Desktop records."
                 )
             }
         case let .inventoryReady(_, handoff):
@@ -3394,7 +3594,7 @@ final class SessionManagerModel: ObservableObject {
                     nativeSessionID: id,
                     state: .eligible,
                     category: inventoryByID[id]?.category,
-                    message: "Eligible in the exact frozen cleanup scope."
+                    message: inventoryByID[id]?.initiallyAbsent == true ? "Already clear." : "Ready for cleanup."
                 )
             }
         case let .inventoryBlocked(_, _, targets, _):
@@ -3405,7 +3605,7 @@ final class SessionManagerModel: ObservableObject {
                     nativeSessionID: $0,
                     state: .pending,
                     category: nil,
-                    message: "Awaiting durable prepared-operation linkage."
+                    message: "Saving cleanup progress."
                 )
             }
         case let .bindingRecoveryRequired(_, handoff, _, message):
@@ -3441,6 +3641,17 @@ final class SessionManagerModel: ObservableObject {
         case .idle:
             return "No canonical Delete handoff is queued."
         }
+    }
+
+    var canContinueNativeDeleteDesktopCleanup: Bool {
+        guard case let .inventoryReady(_, handoff) = nativeDeleteDesktopCleanupState,
+              ghostRepairCleanupState == .idle,
+              let inventory = ghostRepairBulkInventory,
+              !handoff.nativeSessionIDs.isEmpty,
+              Set(handoff.nativeSessionIDs) == ghostRepairBulkSelection,
+              Set(inventory.eligibleThreadIDs) == ghostRepairBulkSelection,
+              ghostRepairBulkWorkflowMutationBlockedReason == nil else { return false }
+        return true
     }
 
     var nativeDeleteDesktopCleanupStatusBlockedReason: String? {
@@ -4085,6 +4296,73 @@ final class SessionManagerModel: ObservableObject {
         return true
     }
 
+    var hasPendingGhostCleanup: Bool {
+        if !nativeDeleteDesktopCleanupAllowsStartingNew { return true }
+        guard let phase = ghostRepairBulkProtectedOperation?.phase else { return false }
+        switch phase {
+        case .completed, .closedBeforeAttempt: return false
+        default: return true
+        }
+    }
+
+    /// One observation on launch/refresh, or on return after at least a minute.
+    /// No polling, persisted full inventory, preview, or mutation is dispatched.
+    @discardableResult
+    func refreshGhostOverview(force: Bool = false) -> Task<Void, Never>? {
+        if let ghostOverviewTask { return ghostOverviewTask }
+        guard !isGhostRepairBulkInventoryPresented,
+              !hasPendingGhostCleanup,
+              !isGhostRepairBulkPreparationInFlight,
+              !isNativeDeleteDesktopCleanupRequestInFlight,
+              !isLoading else { return nil }
+        if !force, let last = ghostOverviewLastAttempt,
+           Date().timeIntervalSince(last) < 60 { return nil }
+        ghostOverviewLastAttempt = Date()
+        guard ghostRepairBulkInventoryCapabilities.observationAvailable,
+              ghostRepairBulkInventoryCapabilities.canonicalSourceQueryAvailable else {
+            ghostOverviewState = .unavailable
+            return nil
+        }
+        ghostOverviewState = .checking
+        let request = CodexGhostRepairBulkInventoryRequest(
+            requestID: UUID(), snapshotReference: UUID().uuidString.lowercased()
+        )
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { ghostOverviewTask = nil }
+            let outcome = await ghostRepairBulkInventoryCoordinator.observe(request: request)
+            guard outcome.requestID == request.requestID,
+                  case let .inventory(_, inventory) = outcome,
+                  inventory.snapshotReference == request.snapshotReference else {
+                ghostOverviewState = .unavailable
+                return
+            }
+            ghostOverviewState = .checked(.init(inventory: inventory))
+        }
+        ghostOverviewTask = task
+        return task
+    }
+
+    /// The main entry opens the existing batch flow. It resumes protected work
+    /// and leaves a completed follow-up only through the existing reset gate.
+    func presentMainGhostCleanup() async {
+        await ghostOverviewTask?.value
+        guard !isGhostRepairBulkInventoryPresented else { return }
+        isMainGhostCleanupEnabled = true
+        if hasPendingGhostCleanup {
+            presentGhostRepairBulkInventory()
+            return
+        }
+        if nativeDeleteDesktopCleanupContext != nil || ghostRepairBulkProtectedOperation != nil {
+            guard startNewGhostRepairBulkPreparation() else { return }
+        }
+        if case .disabled = ghostRepairBulkInventoryState {
+            ghostRepairBulkInventoryState = .idle
+        }
+        presentGhostRepairBulkInventory()
+        await prepareGhostRepairBulkInventory()
+    }
+
     func presentGhostRepairBulkInventory() {
         guard isGhostRepairBulkWorkflowEnabled else {
             errorMessage = ghostRepairBulkInventoryBlockedReason
@@ -4104,6 +4382,9 @@ final class SessionManagerModel: ObservableObject {
             return false
         }
         isGhostRepairBulkInventoryPresented = false
+        // A partial or scoped cleanup never implies global absence. Observe
+        // again after the sheet closes; unresolved work retains its identity.
+        ghostOverviewState = .unchecked
         return true
     }
 
@@ -4120,7 +4401,7 @@ final class SessionManagerModel: ObservableObject {
         nativeDeleteDesktopCleanupStatusRequestID = nil
         ghostRepairBulkSavedPreviewRequestIDDraft = ""
         resetGhostRepairBulkWorkflowState(
-            enabled: isGhostRepairBulkReconciliationEnabled
+            enabled: isGhostRepairBulkWorkflowEnabled
         )
         return true
     }
@@ -4183,6 +4464,7 @@ final class SessionManagerModel: ObservableObject {
     /// handoff. The legacy injected coordinator path remains only so existing
     /// Snapshot journals and deterministic compatibility tests can be read.
     func prepareGhostRepairBulkInventory() async {
+        await ghostOverviewTask?.value
         guard ghostRepairBulkPreparationBlockedReason == nil else {
             ghostRepairBulkPreparationState = .blocked(
                 message: ghostRepairBulkPreparationBlockedReason
@@ -4350,8 +4632,15 @@ final class SessionManagerModel: ObservableObject {
         await observeGhostRepairBulkInventory()
         guard case let .ready(inventory) = ghostRepairBulkInventoryState,
               inventory.snapshotReference == scanReference else {
+            let message: String
+            let savedDeletion = cleanupContext == nil ? "" : " Your deletion result is saved."
+            if case .unavailable(_, .canonicalSourceBusy) = ghostRepairBulkInventoryState {
+                message = "Codex was updating its data during the check. Wait for active work to finish, then try again. Cleanup has not started." + savedDeletion
+            } else {
+                message = "The cleanup check could not finish. Review the reason below, then try again. Cleanup has not started." + savedDeletion
+            }
             ghostRepairBulkPreparationState = .blocked(
-                message: "Current local state and exact Codex reads did not form one complete, consistent Ghost inventory."
+                message: message
             )
             return
         }
@@ -4692,6 +4981,7 @@ final class SessionManagerModel: ObservableObject {
     }
 
     func observeGhostRepairBulkInventory() async {
+        await ghostOverviewTask?.value
         guard ghostRepairBulkInventoryBlockedReason == nil,
               let snapshotReference = Self.canonicalSnapshotReference(
                 ghostRepairBulkSnapshotReferenceDraft
@@ -4748,7 +5038,16 @@ final class SessionManagerModel: ObservableObject {
             isShowingSelectedGhostRepairBulkItemsOnly = false
             invalidateGhostRepairBulkPreparedEvidence()
             ghostRepairBulkInventoryState = .ready(inventory)
+            if nativeDeleteDesktopCleanupContext == nil {
+                ghostOverviewLastAttempt = Date()
+                ghostOverviewState = .checked(.init(inventory: inventory))
+            }
         case let .unavailable(_, failure):
+            logDiagnostic(level: .warning, category: .inventory,
+                message: "Desktop cleanup scan stopped", metadata: [
+                    "stage": failure.stage.rawValue,
+                    "reader_reason": failure.readerReason?.rawValue ?? "not-applicable"
+                ])
             ghostRepairBulkSelection.removeAll()
             isShowingSelectedGhostRepairBulkItemsOnly = false
             invalidateGhostRepairBulkPreparedEvidence()
@@ -4756,6 +5055,9 @@ final class SessionManagerModel: ObservableObject {
                 snapshotReference: snapshotReference,
                 stage: failure.stage
             )
+            if nativeDeleteDesktopCleanupContext == nil {
+                ghostOverviewState = .unavailable
+            }
         }
     }
 
@@ -7462,6 +7764,11 @@ final class SessionManagerModel: ObservableObject {
         compatibilityReport = review.report
         compatibilityReportIsCurrent = review.isCurrent
         compatibilityCheckError = nil
+        if review.sourceHomeUnavailable {
+            compatibilityCheckError = "The Codex data location is not available yet. Refresh sessions to finish comparing saved compatibility results. This does not indicate a Codex update."
+            isCompatibilityUpdateAlertPresented = false
+            return
+        }
         if review.metadataUnavailable {
             compatibilityCheckError = "Database metadata could not be read. This is not evidence of a Codex update or incompatibility. Open Compatibility and review database diagnostics."
             isCompatibilityUpdateAlertPresented = false
@@ -7491,12 +7798,12 @@ final class SessionManagerModel: ObservableObject {
                         : " There is no saved check for this environment.")
                     + " Browsing remains available when readable; unverified operations stay protected.")
         }
-        let unresolved = review.report?.results.filter {
-            $0.status != .supportedByBuild && review.report?.hasVerifiedBehavior(for: $0.feature) != true
+        let unresolved = review.report.map {
+            CodexCompatibilityPresentation.availability($0, isCurrent: review.isCurrent).filter { !$0.isAvailable }
         } ?? []
         guard !unresolved.isEmpty else { return nil }
         return (review.environmentFingerprint + ":features", "Some Codex features need attention",
-                versions + " " + unresolved.map { "\($0.feature.label): \($0.status.label)" }.joined(separator: "; ")
+                versions + " " + unresolved.map { "\($0.feature.label): \($0.label)" }.joined(separator: "; ")
                 + ". Supported features remain available.")
     }
 

@@ -69,6 +69,41 @@ final class CodexCompatibilityInstallationTests: XCTestCase {
         XCTAssertEqual(before, try Data(contentsOf: cache))
     }
 
+    func testUnresolvedStartupHomeIsNotAnUpdateAndDoesNotReuseSavedAuthority() async throws {
+        let executable = root.appendingPathComponent("runtime")
+        try Data("#!/bin/sh\nexit 1\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let request = CodexCompatibilityRequest(providerExecutable: executable, codexHome: root)
+        let installation = try CodexCompatibilityInstallation.read(request, desktopCandidates: [])
+        let cache = root.appendingPathComponent("cache.json")
+        let inspector = CodexCompatibilityInspector(reportURL: cache, desktopCandidates: [])
+        var report = CodexCompatibilityReport(revision: CodexCompatibilityReport.policyRevision, checkedAt: Date(),
+            provider: .init(path: executable.path, version: "0.153.4", sha256: String(repeating: "a", count: 64)),
+            desktop: nil, environmentFingerprint: installation.fingerprint,
+            desktopSchemaProfile: nil, results: [], notes: [])
+        report.installation = installation
+        try await inspector.saveInspection(report)
+        let before = try Data(contentsOf: cache)
+        let unresolved = try await inspector.reviewSavedCompatibility(
+            .init(providerExecutable: executable, codexHome: nil))
+        XCTAssertTrue(unresolved.sourceHomeUnavailable)
+        XCTAssertFalse(unresolved.isCurrent, "Never fill in the missing home from a saved report")
+        XCTAssertEqual(unresolved.report, report)
+        XCTAssertNil(unresolved.providerVersion, "No version probe is needed for an unresolved home")
+        let admittedWithoutHome = await inspector.isCurrent(report,
+            request: .init(providerExecutable: executable, codexHome: nil))
+        XCTAssertFalse(admittedWithoutHome)
+
+        let ready = try await inspector.reviewSavedCompatibility(request)
+        XCTAssertTrue(ready.isCurrent)
+        XCTAssertFalse(ready.sourceHomeUnavailable)
+        let moved = try await inspector.reviewSavedCompatibility(
+            .init(providerExecutable: executable, codexHome: root.appendingPathComponent("other-home")))
+        XCTAssertFalse(moved.isCurrent, "A real location change must still require verification")
+        XCTAssertFalse(moved.sourceHomeUnavailable)
+        XCTAssertEqual(try Data(contentsOf: cache), before, "Comparison never rewrites saved evidence")
+    }
+
     private func residentBytes() throws -> UInt64 {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)

@@ -53,11 +53,8 @@ struct CodexGhostRepairDatabaseSchemaProfile: Equatable, Sendable {
         automationIndexes: automationV33AndV34Indexes
     )
 
-    static let admittedProfiles = [desktopV32, desktopV33, desktopV34]
-
-    /// The September layout keeps user_version 34. It is recognized for
-    /// structure inspection and synthetic SQL tests only; it is deliberately
-    /// absent from the production snapshot/mutation admission above.
+    /// The September layout keeps user_version 34, so its exact table contract
+    /// and timed history must be bound separately from the older v34 layout.
     static let desktopV34Extended = Self(
         identifier: "desktop-v34-extended",
         databaseVersions: desktopV34.databaseVersions,
@@ -72,7 +69,13 @@ struct CodexGhostRepairDatabaseSchemaProfile: Equatable, Sendable {
                          exactColumns: table.exactColumns, customIndexes: table.customIndexes)
         })
 
-    static let inspectionProfiles = admittedProfiles + [desktopV34Extended]
+    static let admittedProfiles = [desktopV32, desktopV33, desktopV34, desktopV34Extended]
+    static let inspectionProfiles = admittedProfiles
+
+    // Old persisted evidence retains its encoding/hash. The same-version
+    // extension always requires the explicit marker from a full schema read.
+    var evidenceIdentifier: String? { self == .desktopV34Extended ? identifier : nil }
+    var timedHistoryRequired: Bool { self == .desktopV34Extended }
 
     static func admitted(desktopUserVersion: Int32)
         -> CodexGhostRepairDatabaseSchemaProfile?
@@ -88,10 +91,12 @@ struct CodexGhostRepairDatabaseSchemaProfile: Equatable, Sendable {
         guard databases.map(\.database)
                 == CodexGhostRepairSnapshotAnalysisDatabase.allCases,
               let desktop = databases.first(where: { $0.database == .desktop }),
-              let profile = admitted(
-                  desktopUserVersion: desktop.schemaVersion
-              ),
+              let profile = admittedProfiles.first(where: {
+                  $0.databaseVersions[.desktop] == desktop.schemaVersion
+                      && $0.evidenceIdentifier == desktop.schemaProfileIdentifier
+              }),
               databases.allSatisfy({ evidence in
+                  evidence.schemaProfileIdentifier == profile.evidenceIdentifier &&
                   profile.databaseVersions[evidence.database]
                       == evidence.schemaVersion
                       && evidence.integrityCheckPassed
@@ -347,5 +352,48 @@ struct CodexGhostRepairDatabaseSchemaProfile: Equatable, Sendable {
             defaultValue: defaultValue,
             primaryKeyPosition: primaryKey
         )
+    }
+}
+
+
+extension CodexGhostRepairDatabaseSchemaProfile {
+    /// Called again inside the cleanup transaction. The extended schema is
+    /// fully checked, including timed history, triggers and foreign keys.
+    static func liveEvidence(
+        _ handles: [(CodexGhostRepairSnapshotAnalysisDatabase, CodexGhostRepairProductionSQLite)]
+    ) throws -> [CodexGhostRepairSnapshotAnalysisDatabaseEvidence] {
+        guard let desktop = handles.first(where: { $0.0 == .desktop })?.1 else {
+            throw CodexGhostRepairError.invalidDatabaseContract("Missing Desktop database.")
+        }
+        let columns = try desktop.query("PRAGMA table_info('local_thread_catalog')", maximumRows: 128)
+        let extended = columns.contains { $0.value(named: "name") == .text("trial_conversation_type") }
+        let profile: Self? = extended ? .desktopV34Extended : nil
+        return try handles.map { database, handle in
+            let version = try handle.schemaVersion()
+            if extended {
+                let result = try CodexCompatibilityDatabaseContract.inspect(database: database, version: version) { sql in
+                    try handle.query(sql, maximumRows: 1_024).map { row in
+                        try row.fields.map { field -> String? in
+                            switch field.value {
+                            case .null: nil
+                            case let .text(value): value
+                            case let .integer(value): String(value)
+                            case let .real(value): String(value)
+                            case .blob: throw CodexGhostRepairError.invalidDatabaseContract("Invalid schema metadata.")
+                            }
+                        }
+                    }
+                }
+                guard result.issue == nil,
+                      database != .desktop || result.profile == profile?.identifier,
+                      database != .threadHistory || result.profile == "thread-history-timed" else {
+                    throw CodexGhostRepairError.invalidDatabaseContract("Extended Desktop schema changed before cleanup.")
+                }
+            }
+            return .init(database: database, schemaVersion: version,
+                         integrityCheckPassed: try handle.integrityPassed(),
+                         foreignKeyViolationCount: try handle.foreignKeyViolationCount(),
+                         schemaProfileIdentifier: profile?.evidenceIdentifier)
+        }
     }
 }

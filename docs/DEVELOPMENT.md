@@ -57,6 +57,40 @@ Core 測試通過不代表 SwiftUI 已連入 Xcode target。修改 App 或共用
 
 ## Codex 更新後
 
+### 與 App 共用的檢查與隔離測試
+
+不開啟 ASM，執行：
+
+```bash
+./scripts/check_codex_compatibility.sh
+```
+
+這個入口透過 Swift Package 的 `asm-compatibility` executable 呼叫 App 同一個 `CodexCompatibilityInspector`，依序執行介面／資料庫結構檢查，以及封存還原、官方刪除、Desktop SQL 三項隔離測試。CLI 使用與 App 相同的執行檔探索順序；資料目錄使用 `--codex-home`、`CODEX_HOME` 或預設 `~/.codex`，不啟動私人 App Server 探索目錄。App 若使用另一個資料目錄，需明確指定相同位置。Desktop 探索與版本、結構、測試判斷均共用核心，沒有第二份 Swift 測試實作。
+
+```bash
+# 只檢查介面與資料庫中繼資料，不執行隔離行為測試：
+./scripts/check_codex_compatibility.sh --inspect-only
+# 路徑參數需為絕對路徑；shell 會展開下列 ~：
+./scripts/check_codex_compatibility.sh --codex-home ~/.codex --output-root /tmp/asm-compatibility-reports
+./scripts/check_codex_compatibility.sh --help
+```
+
+首次編譯、後續增量建置；建置快取在 repository 的 `tmp/compatibility-build`。每次報告存入 `tmp/compatibility-reports/run-<UUID>/`，包含 `report.json`、`summary.txt` 與獨立的 `inspection-cache.json`。輸出目錄及報告限本機使用者讀寫；含本機路徑，勿提交到公開 Git。拒絕把報告存入 Codex 資料目錄或 ASM 的 App 狀態目錄。每次使用新目錄，不覆蓋舊結果或同步 App 快取。
+
+報告記錄 ASM 原始碼版本／commit（未提交程式變更標記為 dirty）、實際 CLI／Desktop 版本、環境指紋、測試結果、功能支援狀態、診斷與時間。結果只對該原始碼建置及指定環境有效，不代表已安裝的另一版 ASM。完成後重開獨立快取並核對資料及安裝狀態；這是報告保存驗證，不是啟動 ASM 或真正 Desktop 重開驗收。
+
+結束碼：`0` 表示此次要求的自動檢查全數通過；`2` 表示有失敗、略過或無法檢查；`1` 表示執行、保存核對或環境一致性失敗；`64` 表示參數錯誤。`--inspect-only` 的 `0` 只代表結構／介面檢查通過。Desktop 正式清理支援獨立呈現，未開放不會把已通過的自動測試改成失敗；`0` 也不授予正式清理權限。
+
+### 新版 Desktop 正式清理契約
+
+CLI `0.156.1`、`0.157.1`／Desktop bundled `0.158.0-alpha.2.1` 使用獨立的 extended v34 契約。雖然 `user_version` 仍為 34，快照證據會另外保存完整結構識別；必須同時符合新增 catalog／automation 欄位及 timed history，不能借用舊版 v34 證據。正式清理在備份後及交易內再次檢查完整新版結構、trigger 與 foreign key，欄位變動即停止。
+
+新版本准入的依據包含隔離的實際 runtime 缺席回應、148 筆正式清理交易、備份綁定、回滾及冷讀報告測試。這是本機候選支援；真實 Desktop 重開後是否仍保持清理結果，另記錄實機驗收，不由 SQL self-test 自動宣告。
+
+需要診斷實機清理的讀取問題時，可明確啟用 `CodexGhostRepairInstalledReadTests`。`ASM_INSTALLED_CLEANUP_READ=1` 會用正式副本讀取程式檢查隨機不存在的 ID；指定 `ASM_INSTALLED_CLEANUP_THREAD_ID` 可限定已知 ID。另加 `ASM_INSTALLED_CLEANUP_SCAN=1` 會對該精確 ID 跑完整官方 inventory／exact-read 掃描，要求結果可接續清理。使用 `swift test --disable-sandbox --package-path macos/AgentSessionManager --filter CodexGhostRepairInstalledReadTests` 執行。這些是獨立、明確啟用的唯讀探針，只輸出狀態與筆數，不保存 Preview 或送 Delete；不是一般相容性檢查或正式清理驗收。一般驗證及更新稽核會清除這三個環境變數。
+
+### 維護用唯讀稽核
+
 先執行唯讀稽核，不先要求使用者關閉 Codex 或挑對話測刪：
 
 ```bash
@@ -81,6 +115,10 @@ Ghost 分項的 ready_current_build 表示符合目前程式契約；candidate_r
 需要新版本不可逆驗收時，另行取得精確範圍授權並使用隔離資料。一般驗證、schema 稽核與歷史成功紀錄都不能代替這項授權。
 
 ## 版本與本機候選版
+
+日常程式修改或文件更新完成必要的建置、測試與結果說明即可，不把每次修改自動接到 `prepare`。使用者要求交付新版、提供新版安裝檔或準備候選時，沿用下列版本與打包流程，產生 `.dmg`、`.dmg.sha256`、`.dmg.candidate.json` 三個檔案；不需要使用者再次特別指定 DMG。
+
+「不要每次修改都產生新的 DMG」限制的是打包頻率，沒有禁止新版交付時製作 DMG，也沒有改變交付格式。除非使用者要求其他格式，交付新版仍使用上述三檔，不自行改成裸 `.app` 或 `.app.zip`；版本遞增、完整驗證與來源綁定也維持原流程。
 
 版本唯一來源為 `macos/AgentSessionManager/App/AgentSessionManager/Config/Version.xcconfig`，Debug／Release 共用。包含對外三段版本、獨立 build 與 `ASM_RELEASE_SUFFIX`；不使用日期、Git commit 數或功能名稱當版號。
 

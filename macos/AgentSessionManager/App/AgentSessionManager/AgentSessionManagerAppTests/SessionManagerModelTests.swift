@@ -3,6 +3,270 @@ import XCTest
 
 @MainActor
 final class SessionManagerModelTests: XCTestCase {
+    func testGhostOverviewChecksGloballyWithoutEnablingOrPreparingCleanup() async {
+        let coordinator = AppTestGhostRepairBulkInventoryCoordinator(
+            inventory: AppTestGhostRepairBulkFixture.inventory, directScan: true)
+        var preferences: [Bool] = []
+        let model = makeModel(sessions: [], bulkReconciliationPreferenceWriter: { preferences.append($0) },
+                              bulkInventoryCoordinator: coordinator)
+        model.searchText = "nothing matches"
+        model.selectStatusFilter(.deleted)
+        await model.refreshGhostOverview()?.value
+        guard case let .checked(summary) = model.ghostOverviewState else {
+            return XCTFail("Expected a complete global observation")
+        }
+        XCTAssertEqual(summary.confirmedCount, 3)
+        XCTAssertEqual(summary.eligibleCount, 2)
+        XCTAssertTrue(model.ghostOverviewState.needsAttention)
+        XCTAssertFalse(model.isGhostRepairBulkWorkflowEnabled)
+        XCTAssertTrue(preferences.isEmpty)
+        XCTAssertEqual(model.ghostRepairBulkInventoryState, .disabled)
+        XCTAssertTrue(model.ghostRepairBulkSelection.isEmpty)
+        XCTAssertEqual(model.ghostRepairBulkPreviewState, .idle)
+        XCTAssertNil(model.ghostRepairBulkConfirmationReceipt)
+        XCTAssertFalse(model.isGhostRepairBulkInventoryPresented)
+        XCTAssertNil(model.refreshGhostOverview(), "Focus events are throttled, not polled")
+        let requests = await coordinator.requestCount()
+        XCTAssertEqual(requests, 1)
+
+        // A failed fresh check must replace the old count, never report zero.
+        await coordinator.setFailureStage(.canonicalSourceBusy)
+        await model.refreshGhostOverview(force: true)?.value
+        XCTAssertEqual(model.ghostOverviewState, .unavailable)
+        XCTAssertTrue(model.ghostOverviewState.needsAttention)
+    }
+
+    func testGhostOverviewDistinguishesBlockedUncertainAndRetainedData() async {
+        let base = AppTestGhostRepairBulkFixture.inventory
+        func inventory(_ items: [CodexGhostRepairBulkInventoryItem]) -> CodexGhostRepairBulkInventory {
+            .init(snapshotReference: base.snapshotReference, sourceLayoutIdentifier: base.sourceLayoutIdentifier,
+                  items: items, inventoryDigest: base.inventoryDigest)
+        }
+        let blocked = GhostOverviewSummary(inventory: inventory(base.items.filter { $0.disposition == .blocked }))
+        XCTAssertEqual(blocked.eligibleCount, 0)
+        XCTAssertEqual(blocked.confirmedCount, 1)
+        XCTAssertTrue(GhostOverviewState.checked(blocked).needsAttention)
+        let uncertain = CodexGhostRepairBulkInventoryItem(threadID: "uncertain", disposition: .unconfirmed,
+            category: nil, blockers: [.exactReadUnavailable], evidenceDigest: base.inventoryDigest)
+        let retained = CodexGhostRepairBulkInventoryItem(threadID: "retained", disposition: .unconfirmed,
+            category: nil, blockers: [.canonicalStatePresent], evidenceDigest: base.inventoryDigest)
+        let summary = GhostOverviewSummary(inventory: inventory([uncertain, retained]))
+        XCTAssertEqual(summary.confirmedCount, 0)
+        XCTAssertEqual(summary.uncertainCount, 1)
+        XCTAssertTrue(GhostOverviewState.checked(summary).needsAttention)
+        let coordinator = AppTestGhostRepairBulkInventoryCoordinator(inventory: inventory([retained]), directScan: true)
+        let model = makeModel(sessions: [], bulkInventoryCoordinator: coordinator)
+        await model.refreshGhostOverview()?.value
+        guard case let .checked(clear) = model.ghostOverviewState else { return XCTFail("Expected checked") }
+        XCTAssertEqual(clear.confirmedCount, 0)
+        XCTAssertEqual(clear.uncertainCount, 0)
+        XCTAssertFalse(model.ghostOverviewState.needsAttention)
+    }
+
+    func testMainGhostEntryWaitsForObservationAndStartsFreshBatchWithoutSettings() async {
+        let coordinator = AppTestGhostRepairBulkInventoryCoordinator(
+            inventory: AppTestGhostRepairBulkFixture.inventory, directScan: true, suspendObservation: true)
+        var preferences: [Bool] = []
+        let model = makeModel(sessions: [], bulkReconciliationPreferenceWriter: { preferences.append($0) },
+                              bulkInventoryCoordinator: coordinator)
+        let first = model.refreshGhostOverview()
+        let duplicate = model.refreshGhostOverview(force: true)
+        XCTAssertEqual(model.ghostOverviewState, .checking)
+        let opening = Task { await model.presentMainGhostCleanup() }
+        for _ in 0..<100 {
+            if await coordinator.requestCount() == 1 { break }
+            await Task.yield()
+        }
+        XCTAssertFalse(model.isGhostRepairBulkInventoryPresented)
+        await coordinator.resumeObservation()
+        await first?.value
+        await duplicate?.value
+        await opening.value
+        let requests = await coordinator.requestCount()
+        XCTAssertEqual(requests, 2, "One background read and one fresh user-requested batch scan")
+        XCTAssertTrue(model.isGhostRepairBulkInventoryPresented)
+        XCTAssertEqual(model.ghostRepairBulkInventory?.confirmedGhostCount, 3)
+        XCTAssertFalse(model.isGhostRepairBulkReconciliationEnabled)
+        XCTAssertTrue(preferences.isEmpty)
+        XCTAssertFalse(model.isDesktopCleanupFollowUpsPresented)
+        XCTAssertEqual(model.ghostRepairBulkPreviewState, .idle)
+        XCTAssertNil(model.ghostRepairBulkConfirmationReceipt)
+    }
+
+    func testMainGhostEntryResumesConfirmedBatchWithoutReplacingReceipt() async throws {
+        let (model, inventory, receipts, repair) = makeSimplifiedCleanupFixture()
+        model.presentGhostRepairBulkInventory()
+        await model.prepareGhostRepairBulkInventory()
+        await model.confirmGhostCleanup(selectedIDs: model.ghostRepairBulkSelection,
+                                         inventoryDigest: inventory.inventoryDigest)
+        let confirmed = try XCTUnwrap(model.ghostRepairBulkConfirmationReceipt)
+        let selected = model.ghostRepairBulkSelection
+        XCTAssertTrue(model.hasPendingGhostCleanup)
+        XCTAssertTrue(model.setGhostRepairBulkInventoryPresented(false))
+        XCTAssertNil(model.refreshGhostOverview(force: true))
+        await model.presentMainGhostCleanup()
+        XCTAssertTrue(model.isGhostRepairBulkInventoryPresented)
+        XCTAssertEqual(model.ghostRepairBulkConfirmationReceipt, confirmed)
+        XCTAssertEqual(model.ghostRepairBulkSelection, selected)
+        let confirmations = await receipts.requestCount(), executions = await repair.executionRequestCount()
+        XCTAssertEqual(confirmations, 1)
+        XCTAssertEqual(executions, 0)
+    }
+
+    func testMainGhostEntryLeavesCompletedScopedCleanupForGlobalScan() async throws {
+        let f = try makeIntegratedDeleteFixture(selectedCount: 1)
+        await f.model.continueFreshNativeDeleteCleanup(report: f.report, confirmedPreviewID: f.report.previewID,
+            confirmedNativeSessionIDs: f.report.items.map(\.nativeSessionID))
+        XCTAssertTrue(f.model.nativeDeleteDesktopCleanupVerified(reportID: f.report.id))
+        XCTAssertEqual(f.model.ghostOverviewState, .unchecked, "Scoped success cannot mark global absence")
+        XCTAssertTrue(f.model.setGhostRepairBulkInventoryPresented(false))
+        XCTAssertFalse(f.model.hasPendingGhostCleanup)
+        await f.model.presentMainGhostCleanup()
+        XCTAssertEqual(f.model.nativeDeleteDesktopCleanupState, .idle)
+        XCTAssertNil(f.model.nativeDeleteDesktopCleanupTitle)
+        XCTAssertTrue(f.model.isGhostRepairBulkInventoryPresented)
+        guard case let .checked(summary) = f.model.ghostOverviewState else { return XCTFail("Expected global scan") }
+        XCTAssertEqual(summary.confirmedCount, 148)
+        let executions = await f.repair.executionRequestCount()
+        XCTAssertEqual(executions, 1, "Opening the global route must not execute again")
+    }
+
+    func testMainGhostEntryKeepsUnknownCleanupWithoutRescanningOrRetrying() async {
+        let (model, inventory, _, repair) = makeSimplifiedCleanupFixture(executionUnknown: true)
+        model.presentGhostRepairBulkInventory()
+        await model.prepareGhostRepairBulkInventory()
+        model.clearGhostRepairBulkSelection()
+        model.setGhostRepairBulkItemSelected(inventory.eligibleThreadIDs[0], isSelected: true)
+        await model.confirmGhostCleanup(selectedIDs: model.ghostRepairBulkSelection,
+                                         inventoryDigest: inventory.inventoryDigest)
+        await model.continueGhostCleanupAfterShutdown()
+        let receipt = model.ghostRepairBulkConfirmationReceipt
+        XCTAssertTrue(model.hasPendingGhostCleanup)
+        XCTAssertTrue(model.setGhostRepairBulkInventoryPresented(false))
+        XCTAssertEqual(model.ghostOverviewState, .unchecked)
+        XCTAssertNil(model.refreshGhostOverview(force: true))
+        await model.presentMainGhostCleanup()
+        XCTAssertEqual(model.ghostRepairBulkConfirmationReceipt, receipt)
+        let executions = await repair.executionRequestCount()
+        XCTAssertEqual(executions, 1)
+    }
+
+    func testGhostOverviewRechecksAfterPartialBatchWithoutAssumingGlobalAbsence() async {
+        let (model, inventory, _, _) = makeSimplifiedCleanupFixture()
+        model.presentGhostRepairBulkInventory()
+        await model.prepareGhostRepairBulkInventory()
+        model.clearGhostRepairBulkSelection()
+        model.setGhostRepairBulkItemSelected(inventory.eligibleThreadIDs[0], isSelected: true)
+        await model.confirmGhostCleanup(selectedIDs: model.ghostRepairBulkSelection,
+                                         inventoryDigest: inventory.inventoryDigest)
+        await model.continueGhostCleanupAfterShutdown()
+        XCTAssertEqual(model.ghostRepairBulkClearedThreadIDs.count, 1)
+        XCTAssertTrue(model.setGhostRepairBulkInventoryPresented(false))
+        XCTAssertEqual(model.ghostOverviewState, .unchecked)
+        await model.refreshGhostOverview(force: true)?.value
+        guard case let .checked(summary) = model.ghostOverviewState else { return XCTFail("Expected fresh check") }
+        // This fixed observer still returns every row. Use its current result,
+        // never erase evidence based on an earlier successful cleanup report.
+        XCTAssertEqual(summary.confirmedCount, inventory.confirmedGhostCount)
+        XCTAssertTrue(model.ghostOverviewState.needsAttention)
+    }
+
+    func testRetainedDeleteHistoryQueuesExactCleanupWithoutReopeningDelete() async throws {
+        let fixture = try BulkShippingCompositionTestFixture.make(itemCount: 2)
+        let reportID = UUID(), previewID = UUID()
+        let report = reportID.uuidString.lowercased(), preview = previewID.uuidString.lowercased()
+        try BulkShippingCompositionTestFixture.execute("""
+            INSERT INTO operation_previews(id,provider,operation,status,confirmation_token_hash,manifest_hash,
+                provider_inventory_hash,created_at,expires_at,item_count,known_size_bytes,unknown_size_count,manager_intent)
+            VALUES('\(preview)','codex','permanently_delete','consumed','token','manifest','inventory',
+                '2026-01-01T00:00:00.000Z','2026-01-01T00:01:00.000Z',1,0,1,'permanently_delete');
+            INSERT INTO operation_reports(id,preview_id,provider,operation,outcome,started_at,completed_at,item_count,
+                succeeded_count,failed_count,unknown_count,verified_released_bytes,released_bytes_complete,manager_intent)
+            VALUES('\(report)','\(preview)','codex','permanently_delete','success',
+                '2026-01-01T00:00:00.000Z','2026-01-01T00:00:01.000Z',1,1,0,0,0,0,'permanently_delete');
+            INSERT INTO operation_items(preview_id,report_id,manager_key,native_session_id,expected_native_state,
+                expected_protection_hash,expected_title,result_outcome,observed_native_state,evidence_at)
+            VALUES('\(preview)','\(report)','codex:retained','retained','archived','protection','Retained',
+                'success','absent','2026-01-01T00:00:01.000Z');
+            """, at: fixture.managerStateURL)
+        let handoff = try CodexDesktopCleanupHandoff(canonicalDeleteReportID: reportID,
+            items: [.init(managerKey: "codex:retained", nativeSessionID: "retained", deletedAtMilliseconds: 1_000)])
+        let linkage = AppTestDesktopCleanupLinkageCoordinator(statusOutcomes: [.status(.pending(handoff))])
+        let model = SessionManagerModel(nativeDeleteDesktopCleanupCoordinator: linkage,
+            ghostRepairBulkReconciliationEnabled: false,
+            ghostRepairBulkReconciliationPreferenceWriter: { _ in },
+            stateStoreFactory: { try SQLiteStateStore(databaseURL: fixture.managerStateURL) })
+        // The main entry works before any live inventory reload and without
+        // selecting a session or navigating Report History.
+        model.presentDesktopCleanupFollowUps()
+        XCTAssertTrue(model.isDesktopCleanupFollowUpsPresented)
+        XCTAssertFalse(model.isReportHistoryPresented)
+        let followUps = try await model.desktopCleanupFollowUps()
+        XCTAssertEqual(followUps.entries.map(\.id), [reportID])
+        XCTAssertEqual(followUps.entries.first?.title, "Retained")
+        XCTAssertEqual(followUps.entries.first?.statusText, "Cleanup not yet checked")
+        XCTAssertEqual(followUps.entries.first?.canContinue, true)
+        XCTAssertNil(model.pendingNativeDeletePreview)
+        XCTAssertNil(model.latestNativeDeleteReport)
+        XCTAssertEqual(model.nativeDeleteDesktopCleanupState, .idle)
+        let statusReads = await linkage.statusRequestCount()
+        let reviewReads = await linkage.reviewRequestCount()
+        XCTAssertEqual(statusReads, 1)
+        XCTAssertEqual(reviewReads, 0)
+        let entry = try XCTUnwrap(followUps.entries.first)
+        let binding = try CodexDesktopCleanupBinding(canonicalDeleteReportID: reportID,
+            handoffDigest: handoff.handoffDigest, bulkIdentity: .init(requestID: UUID(), operationID: UUID()),
+            confirmationReceiptID: UUID(), confirmationReceiptDigest: "sha256:" + String(repeating: "1", count: 64),
+            planDigest: "sha256:" + String(repeating: "2", count: 64),
+            backupReceiptDigest: "sha256:" + String(repeating: "3", count: 64),
+            preparedJournalPayloadHash: "sha256:" + String(repeating: "4", count: 64),
+            items: [.init(managerKey: "codex:retained", nativeSessionID: "retained",
+                          deletedAtMilliseconds: 1_000, category: .ordinary)], boundAtMilliseconds: 2_000)
+        let verified = DesktopCleanupFollowUp(report: entry.report,
+            status: .status(.verified(handoff, binding, completedAtMilliseconds: 3_000)))
+        XCTAssertTrue(verified.isVerified)
+        XCTAssertFalse(verified.canContinue)
+        let unknown = DesktopCleanupFollowUp(report: entry.report, status: .status(.outcomeUnknown(handoff, binding)))
+        XCTAssertFalse(unknown.isVerified)
+        XCTAssertEqual(unknown.statusText, "Result needs checking")
+        XCTAssertTrue(unknown.canContinue)
+        for status: CodexDesktopCleanupStatusOutcome in [.notFound(reportID: reportID), .unavailable(message: "Unavailable")] {
+            let unavailable = DesktopCleanupFollowUp(report: entry.report, status: status)
+            XCTAssertFalse(unavailable.isVerified)
+            XCTAssertFalse(unavailable.canContinue)
+        }
+        model.isDesktopCleanupFollowUpsPresented = false
+        try model.queueRetainedNativeDeleteDesktopCleanup(reportID: reportID)
+        guard case let .queued(context) = model.nativeDeleteDesktopCleanupState else {
+            return XCTFail("Expected retained cleanup review")
+        }
+        XCTAssertEqual(context.canonicalDeleteReportID, reportID)
+        XCTAssertEqual(context.expectedNativeSessionIDs, ["retained"])
+        XCTAssertNil(model.latestNativeDeleteReport)
+        XCTAssertNil(model.pendingNativeDeletePreview)
+        XCTAssertFalse(model.isGhostRepairBulkReconciliationEnabled)
+        XCTAssertTrue(model.isGhostRepairBulkWorkflowEnabled)
+        XCTAssertThrowsError(try model.queueRetainedNativeDeleteDesktopCleanup(reportID: reportID))
+        XCTAssertEqual(model.nativeDeleteDesktopCleanupState, .queued(context))
+        model.presentDesktopCleanupFollowUps()
+        XCTAssertTrue(model.isGhostRepairBulkInventoryPresented)
+        XCTAssertFalse(model.isDesktopCleanupFollowUpsPresented)
+        XCTAssertEqual(model.nativeDeleteDesktopCleanupState, .queued(context))
+
+        let cold = SessionManagerModel(stateStoreFactory: { try SQLiteStateStore(databaseURL: fixture.managerStateURL) })
+        try BulkShippingCompositionTestFixture.execute("UPDATE operation_items SET result_outcome = 'unknown' WHERE report_id = '\(report)'", at: fixture.managerStateURL)
+        XCTAssertThrowsError(try cold.queueRetainedNativeDeleteDesktopCleanup(reportID: reportID))
+        XCTAssertEqual(cold.nativeDeleteDesktopCleanupState, .idle)
+        do {
+            _ = try await cold.desktopCleanupFollowUps()
+            XCTFail("Inconsistent saved report must not become a cleanup candidate")
+        } catch { /* The history reader rejects mismatched report/item totals. */ }
+        try BulkShippingCompositionTestFixture.execute("UPDATE operation_reports SET outcome = 'unknown', succeeded_count = 0, unknown_count = 1 WHERE id = '\(report)'", at: fixture.managerStateURL)
+        let uncertain = try await cold.desktopCleanupFollowUps()
+        XCTAssertTrue(uncertain.entries.isEmpty, "Unknown deletion is never offered as a completed Delete")
+        XCTAssertThrowsError(try cold.queueRetainedNativeDeleteDesktopCleanup(reportID: UUID()))
+    }
+
     func testDeleteSpaceMeasurementUsesOnlySuccessfulAbsentItemsAndOneBatchScan() async {
         let reader = AppTestSessionSizeReader(values: ["a": 0, "b": 0, "failed": 0, "unknown": 0])
         let model = SessionManagerModel(sessionFileSizeReader: reader)
@@ -208,6 +472,40 @@ final class SessionManagerModelTests: XCTestCase {
         XCTAssertEqual(calls, 0)
     }
 
+    func testUnresolvedStartupHomeDoesNotFlashUpdateAlertAndStillDetectsLaterChange() async {
+        let inspector = AppTestCompatibilityInspector(current: false)
+        await inspector.setSourceHomeUnavailable(true)
+        let model = SessionManagerModel(
+            liveProvider: CodexAppServerProvider(configuration: .init(executableURL: URL(fileURLWithPath: "/usr/bin/true"))),
+            compatibilityInspector: inspector)
+        await model.refreshCompatibilityReport()?.value
+        XCTAssertFalse(model.isCompatibilityUpdateAlertPresented)
+        XCTAssertFalse(model.compatibilityReportIsCurrent)
+        XCTAssertNotNil(model.compatibilityReport, "Retain prior evidence for reference")
+        XCTAssertEqual(model.compatibilityNotice?.title, "Compatibility check needs attention")
+        XCTAssertTrue(model.compatibilityCheckError?.contains("data location") == true)
+
+        await inspector.setSourceHomeUnavailable(false)
+        await inspector.setCurrent(true)
+        await model.refreshCompatibilityReport(force: true)?.value
+        XCTAssertTrue(model.compatibilityReportIsCurrent)
+        XCTAssertFalse(model.isCompatibilityUpdateAlertPresented)
+        XCTAssertNil(model.compatibilityNotice)
+
+        await inspector.setSourceHomeUnavailable(true)
+        await inspector.setCurrent(false)
+        await inspector.changeEnvironment("updated-runtime")
+        await model.refreshCompatibilityReport()?.value
+        XCTAssertFalse(model.isCompatibilityUpdateAlertPresented)
+        await inspector.setSourceHomeUnavailable(false)
+        await model.refreshCompatibilityReport()?.value
+        XCTAssertTrue(model.isCompatibilityUpdateAlertPresented,
+                      "An unknown home must not consume the later confirmed update reminder")
+        let inspections = await inspector.inspectionCount, behaviors = await inspector.behaviorCount
+        XCTAssertEqual(inspections, 0)
+        XCTAssertEqual(behaviors, 0)
+    }
+
     func testChangedRuntimeShowsReminderAndLaterKeepsReviewEntry() async {
         let inspector = AppTestCompatibilityInspector(current: false)
         let model = SessionManagerModel(
@@ -279,6 +577,21 @@ final class SessionManagerModelTests: XCTestCase {
         XCTAssertEqual(model.compatibilityNotice?.title, "Some Codex features need attention")
         XCTAssertTrue(model.compatibilityNotice?.message.contains("Official session deletion") == true)
         XCTAssertFalse(model.isLoading)
+    }
+
+    func testDesktopRestrictionExplainsUpdateInsteadOfRequestingMoreTests() async throws {
+        let inspector = AppTestCompatibilityInspector(current: true)
+        await inspector.requireDesktopUpdate()
+        let model = SessionManagerModel(
+            liveProvider: CodexAppServerProvider(configuration: .init(executableURL: URL(fileURLWithPath: "/usr/bin/true"))),
+            compatibilityInspector: inspector)
+        await model.refreshCompatibilityReport()?.value
+        XCTAssertTrue(model.compatibilityNotice?.message.contains("Not enabled for this Codex version") == true)
+        XCTAssertFalse(model.compatibilityNotice?.message.contains("Further verification needed") == true)
+        let report = try XCTUnwrap(model.compatibilityReport)
+        let row = CodexCompatibilityPresentation.availability(report, isCurrent: model.compatibilityReportIsCurrent).last
+        XCTAssertEqual(row?.state, .updateRequired)
+        XCTAssertTrue(row?.nextStep?.contains("ASM compatibility update") == true)
     }
 
     func testCompatibilityCheckPublishesOnlyAStillCurrentReport() async throws {
@@ -393,6 +706,83 @@ final class SessionManagerModelTests: XCTestCase {
         XCTAssertEqual(model.sessionFileSizeIssues["first"], .homeUnavailable)
         XCTAssertTrue(model.conversationFileSizeHelp(for: row).contains(SessionFileSizeIssue.homeUnavailable.explanation))
         XCTAssertFalse(model.isCalculatingSessionFileSizes)
+    }
+
+    func testAllConversationSizesIgnoreFiltersAndCountEachNativeIDOnce() async {
+        let reader = AppTestSessionSizeReader(values: ["active": 100, "archived": 200,
+                                                       "trash": 300, "deleted": 0, "unrelated": 999])
+        let model = SessionManagerModel(sessionFileSizeReader: reader)
+        let active = SessionPresentation(session: makeSession(nativeID: "active", state: .active))
+        model.sessionRows = [active,
+            SessionPresentation(session: makeSession(nativeID: "archived", state: .archived)),
+            SessionPresentation(session: makeSession(nativeID: "trash", state: .archived, isTrash: true)),
+            makeDeletedPresentation(nativeID: "deleted"), active]
+        let task = model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))
+        XCTAssertEqual(model.allConversationFileSizeLabel, "Calculating…")
+        await task?.value
+        XCTAssertEqual(model.allConversationFileSizeSummary.bytes, 600)
+        XCTAssertEqual(model.allConversationFileSizeSummary.total, 4)
+        XCTAssertEqual(model.allConversationFileSizeSummary.measured, 4)
+        XCTAssertNil(model.allConversationFileSizeCoverage)
+        let label = model.allConversationFileSizeLabel
+        for filter in [CollectionFilter.archive, .trash, .deleted, .active] {
+            model.selectStatusFilter(filter)
+            model.selectProject("not-in-inventory")
+            model.searchText = "nothing matches"
+            model.selection = [active.id]
+            model.isShowingSelectedSessionsOnly = true
+            XCTAssertTrue(model.filteredSessions.isEmpty)
+            XCTAssertEqual(model.allConversationFileSizeLabel, label)
+            XCTAssertEqual(model.allConversationFileSizeSummary.bytes, 600)
+        }
+        model.sessionRows = [active]
+        XCTAssertEqual(model.allConversationFileSizeSummary.bytes, 100,
+                       "Cached sizes for removed rows must not remain in the total")
+    }
+
+    func testAllConversationSizesDistinguishPartialUnknownAndMeasuredZero() async {
+        let reader = AppTestSessionSizeReader(values: ["known": 500])
+        let model = SessionManagerModel(sessionFileSizeReader: reader)
+        model.sessionRows = ["known", "unknown"].map {
+            SessionPresentation(session: makeSession(nativeID: $0, state: .active))
+        }
+        XCTAssertEqual(model.allConversationFileSizeLabel, "Unavailable")
+        await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
+        XCTAssertEqual(model.allConversationFileSizeSummary.bytes, 500)
+        XCTAssertTrue(model.allConversationFileSizeLabel.hasPrefix("At least "))
+        XCTAssertEqual(model.allConversationFileSizeCoverage, "1 of 2 sizes measured")
+        await reader.replace(values: [:])
+        await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
+        XCTAssertNil(model.allConversationFileSizeSummary.bytes)
+        XCTAssertEqual(model.allConversationFileSizeLabel, "Unavailable")
+        await reader.replace(values: ["known": 0, "unknown": 0])
+        await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
+        XCTAssertEqual(model.allConversationFileSizeLabel, "0 B")
+        XCTAssertNil(model.allConversationFileSizeCoverage)
+        model.refreshSessionFileSizes(homeURL: nil)
+        XCTAssertEqual(model.allConversationFileSizeLabel, "Unavailable")
+        model.sessionRows = []
+        XCTAssertEqual(model.allConversationFileSizeLabel, "Unavailable",
+                       "Missing inventory/home must not look like a measured empty inventory")
+        await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
+        XCTAssertEqual(model.allConversationFileSizeLabel, "0 B")
+    }
+
+    func testAllConversationSizesRejectInvalidValuesAndOverflow() async {
+        let reader = AppTestSessionSizeInspectionReader(result: .init(
+            sizes: ["valid": 5, "negative": -1, "conflicting": 10],
+            issues: ["conflicting": .conflictingIdentity]))
+        let model = SessionManagerModel(sessionFileSizeReader: reader)
+        model.sessionRows = ["valid", "negative", "conflicting"].map {
+            SessionPresentation(session: makeSession(nativeID: $0, state: .active))
+        }
+        await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
+        XCTAssertEqual(model.allConversationFileSizeSummary.bytes, 5)
+        XCTAssertEqual(model.allConversationFileSizeSummary.measured, 1)
+        await reader.replace(result: .init(sizes: ["valid": Int64.max, "negative": 1, "conflicting": 0]))
+        await model.refreshSessionFileSizes(homeURL: URL(fileURLWithPath: "/test-only"))?.value
+        XCTAssertNil(model.allConversationFileSizeSummary.bytes)
+        XCTAssertEqual(model.allConversationFileSizeLabel, "Unavailable")
     }
 
     func testSupplementedSessionCanBeFoundBySourceWithoutClearingSelection() {
@@ -3396,7 +3786,7 @@ final class SessionManagerModelTests: XCTestCase {
         XCTAssertEqual(finalReadbackCount, 1)
     }
 
-    func testBulkInventoryIsDefaultOffAndNeverObservesAutomatically() async {
+    func testLegacySettingsShortcutIsDefaultOffAndDoesNotStartScan() async {
         let coordinator = AppTestGhostRepairBulkInventoryCoordinator(
             inventory: AppTestGhostRepairBulkFixture.inventory
         )
@@ -5810,6 +6200,7 @@ final class SessionManagerModelTests: XCTestCase {
 
         await model.prepareGhostRepairBulkInventory()
 
+        XCTAssertTrue(model.canContinueNativeDeleteDesktopCleanup)
         XCTAssertEqual(model.ghostRepairBulkSelection, Set(ids))
         XCTAssertEqual(
             model.nativeDeleteDesktopCleanupState,
@@ -5825,6 +6216,7 @@ final class SessionManagerModelTests: XCTestCase {
         model.clearGhostRepairBulkSelection()
         XCTAssertEqual(model.ghostRepairBulkSelection, Set(ids))
         XCTAssertNotNil(model.nativeDeleteDesktopCleanupSelectionBlockedReason)
+        XCTAssertTrue(model.canContinueNativeDeleteDesktopCleanup)
         let reviewRequestCount = await linkage.reviewRequestCount()
         XCTAssertEqual(reviewRequestCount, 0)
     }
@@ -5882,6 +6274,7 @@ final class SessionManagerModelTests: XCTestCase {
                 model.nativeDeleteDesktopCleanupState else {
             return XCTFail("A non-eligible requested ID must block the scope.")
         }
+        XCTAssertFalse(model.canContinueNativeDeleteDesktopCleanup)
         XCTAssertTrue(model.ghostRepairBulkSelection.isEmpty)
         XCTAssertEqual(
             targets.first { $0.nativeSessionID == ids[1] }?.state,
@@ -6627,10 +7020,14 @@ private actor AppTestCompatibilityInspector: CodexCompatibilityInspecting {
     private var fails = false
     private var reviewFails = false
     private var metadataUnavailable = false
+    private var sourceHomeUnavailable = false
+    func setSourceHomeUnavailable(_ value: Bool) { sourceHomeUnavailable = value }
     func makeMetadataUnavailable() { metadataUnavailable = true }
     private var hasReport = true
     private var fingerprint = "fixture"
-    private var features: [CodexCompatibilityFeatureResult] = []
+    private var features: [CodexCompatibilityFeatureResult] = CodexCompatibilityFeature.allCases.map {
+        .init(feature: $0, status: .supportedByBuild, detail: "Fixture supported")
+    }
     private(set) var inspectionCount = 0
     private(set) var behaviorCount = 0
     func verifyBehavior(_ request: CodexCompatibilityRequest, confirmedFingerprint: String,
@@ -6648,7 +7045,12 @@ private actor AppTestCompatibilityInspector: CodexCompatibilityInspecting {
     func omitSavedReport() { hasReport = false }
     func changeEnvironment(_ value: String) { fingerprint = value }
     func addUnsupportedFeature() {
-        features = [.init(feature: .officialDelete, status: .needsBehaviorVerification, detail: "Fixture unverified")]
+        features.removeAll { $0.feature == .officialDelete }
+        features.append(.init(feature: .officialDelete, status: .needsBehaviorVerification, detail: "Fixture unverified"))
+    }
+    func requireDesktopUpdate() {
+        features.removeAll { $0.feature == .desktopCleanup }
+        features.append(.init(feature: .desktopCleanup, status: .needsBehaviorVerification, detail: "Fixture update required"))
     }
     func inspect(_ request: CodexCompatibilityRequest) throws -> CodexCompatibilityReport {
         inspectionCount += 1
@@ -6660,12 +7062,12 @@ private actor AppTestCompatibilityInspector: CodexCompatibilityInspecting {
     func reviewSavedCompatibility(_ request: CodexCompatibilityRequest) throws -> CodexCompatibilityReview {
         if reviewFails { throw NSError(domain: "Fixture comparison", code: 1) }
         return .init(report: hasReport ? report : nil, isCurrent: current, environmentFingerprint: fingerprint,
-                     providerVersion: current ? "0.999.0" : "0.999.1", desktopVersion: "0.999.0",
-                     metadataUnavailable: metadataUnavailable)
+                     providerVersion: current ? "0.153.4" : "0.999.1", desktopVersion: "0.153.4",
+                     metadataUnavailable: metadataUnavailable, sourceHomeUnavailable: sourceHomeUnavailable)
     }
     private var report: CodexCompatibilityReport {
         .init(revision: CodexCompatibilityReport.policyRevision, checkedAt: Date(timeIntervalSince1970: 1_000),
-              provider: .init(path: "/fixture/codex", version: "0.999.0", sha256: "fixture"), desktop: nil,
+              provider: .init(path: "/fixture/codex", version: "0.153.4", sha256: "fixture"), desktop: nil,
               environmentFingerprint: "fixture", desktopSchemaProfile: nil, results: features, notes: [])
     }
 }
@@ -7397,19 +7799,22 @@ private actor AppTestGhostRepairBulkInventoryCoordinator:
 {
     nonisolated let capabilities: CodexGhostRepairBulkInventoryCapabilities
     private let inventory: CodexGhostRepairBulkInventory?
-    private let failureStage: CodexGhostRepairBulkInventoryFailureStage?
+    private var failureStage: CodexGhostRepairBulkInventoryFailureStage?
     private let resumableSnapshotReference: String?
     private let requestBoundScanReference: Bool
     private let noResidue: Bool
     private var requests: [CodexGhostRepairBulkInventoryRequest] = []
     private var requestedResumeTargets: [[String]] = []
+    private var suspendObservation: Bool
+    private var observationContinuation: CheckedContinuation<Void, Never>?
 
     init(
         inventory: CodexGhostRepairBulkInventory? = nil,
         failureStage: CodexGhostRepairBulkInventoryFailureStage? = nil,
         resumableSnapshotReference: String? = nil,
         directScan: Bool = false,
-        noResidue: Bool = false
+        noResidue: Bool = false,
+        suspendObservation: Bool = false
     ) {
         capabilities = directScan
             ? .packagedLiveScan
@@ -7419,6 +7824,7 @@ private actor AppTestGhostRepairBulkInventoryCoordinator:
         self.resumableSnapshotReference = resumableSnapshotReference
         requestBoundScanReference = directScan
         self.noResidue = noResidue
+        self.suspendObservation = suspendObservation
     }
 
     func verifyNoDesktopResidue(handoff: CodexDesktopCleanupHandoff) async -> Bool {
@@ -7436,6 +7842,9 @@ private actor AppTestGhostRepairBulkInventoryCoordinator:
         request: CodexGhostRepairBulkInventoryRequest
     ) async -> CodexGhostRepairBulkInventoryOutcome {
         requests.append(request)
+        if suspendObservation {
+            await withCheckedContinuation { observationContinuation = $0 }
+        }
         if let failureStage {
             return .unavailable(
                 requestID: request.requestID,
@@ -7467,6 +7876,12 @@ private actor AppTestGhostRepairBulkInventoryCoordinator:
     }
 
     func requestCount() -> Int { requests.count }
+    func setFailureStage(_ stage: CodexGhostRepairBulkInventoryFailureStage) { failureStage = stage }
+    func resumeObservation() {
+        suspendObservation = false
+        observationContinuation?.resume()
+        observationContinuation = nil
+    }
     func resumeRequests() -> [[String]] { requestedResumeTargets }
 }
 

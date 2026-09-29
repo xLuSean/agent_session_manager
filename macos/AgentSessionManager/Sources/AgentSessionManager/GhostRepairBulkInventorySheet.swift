@@ -149,14 +149,18 @@ struct GhostRepairBulkInventorySheet: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    snapshotInput
                     linkedDesktopCleanup
+                    if model.nativeDeleteDesktopAbsenceVerifiedReportID == nil {
+                        snapshotInput
+                    }
                     cleanupProgress
                     if showsFinalRepairStage {
                         finalRepairReview
                     }
-                    stateContent
-                    DisclosureGroup("Recovery tools — normally not needed") {
+                    if model.nativeDeleteDesktopAbsenceVerifiedReportID == nil {
+                        stateContent
+                    }
+                    DisclosureGroup(isDeletionFollowUp ? "Advanced details and recovery" : "Recovery tools — normally not needed") {
                         VStack(alignment: .leading, spacing: 12) {
                             previousBulkOperations
                             savedPreviewReadback
@@ -188,7 +192,7 @@ struct GhostRepairBulkInventorySheet: View {
             _ = model.setGhostRepairBulkInventoryPresented(false)
         }
         .alert(
-            "Clear \(cleanupSelection.count) Ghosts?",
+            isDeletionFollowUp ? "Finish cleanup for \(cleanupSelection.count) deleted conversations?" : "Clear \(cleanupSelection.count) Ghosts?",
             isPresented: $isCleanupConfirmationPresented
         ) {
             Button("Cancel", role: .cancel) {}
@@ -202,7 +206,9 @@ struct GhostRepairBulkInventorySheet: View {
             }
         } message: {
             Text(
-                "Only these \(cleanupSelection.count) selected Ghosts will be cleared. Other items will be kept. After you close Codex and continue, the App will check the data, verify a backup, and clear this batch automatically. Automation settings and their enabled/paused status are kept."
+                (isDeletionFollowUp
+                    ? "These conversations have already been deleted. Next, quit Codex and keep Agent Session Manager open. ASM will verify a backup and remove their remaining Desktop records. Automation settings and schedules are kept."
+                    : "Only these \(cleanupSelection.count) selected Ghosts will be cleared. Other items will be kept. After you close Codex and continue, the App will check the data, verify a backup, and clear this batch automatically. Automation settings and their enabled/paused status are kept.")
                 + manualCleanupScope
             )
         }
@@ -887,7 +893,7 @@ struct GhostRepairBulkInventorySheet: View {
         case .preparing:
             ProgressView("Saving your confirmed cleanup…")
         case .awaitingShutdown:
-            GroupBox("Close Codex to continue") {
+            GroupBox(isDeletionFollowUp ? "2. Close Codex to continue" : "Close Codex to continue") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Quit Codex and stop Codex sessions in terminals or editor extensions. Keep Agent Session Manager open. The App will verify that no writer remains before backing up and clearing your confirmed batch.")
                     Button(shutdownContinuationTitle, role: .destructive) {
@@ -898,7 +904,7 @@ struct GhostRepairBulkInventorySheet: View {
                 }
             }
         case .running:
-            ProgressView("Checking, backing up, and clearing the confirmed Ghosts…")
+            ProgressView(isDeletionFollowUp ? "Checking the backup and clearing remaining records…" : "Checking, backing up, and clearing the confirmed Ghosts…")
         case let .stopped(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
@@ -906,7 +912,7 @@ struct GhostRepairBulkInventorySheet: View {
     }
 
     private var finalRepairReview: some View {
-        GroupBox("Cleanup result") {
+        GroupBox(isDeletionFollowUp ? "3. Cleanup result" : "Cleanup result") {
             VStack(alignment: .leading, spacing: 10) {
                 if model.ghostRepairCleanupState == .running {
                     Text("Keep Codex closed and Agent Session Manager open until the result appears.")
@@ -927,7 +933,7 @@ struct GhostRepairBulkInventorySheet: View {
                 case .executing:
                     Label {
                         Text(
-                            "Executing once and writing the itemized terminal Report. Do not reopen Codex or close this App."
+                            "Clearing remaining records and saving the result. Keep Codex closed and ASM open."
                         )
                     } icon: {
                         ProgressView().controlSize(.small)
@@ -936,7 +942,7 @@ struct GhostRepairBulkInventorySheet: View {
                 case let .completed(report):
                     VStack(alignment: .leading, spacing: 8) {
                         Label(
-                            "Terminal outcome: \(report.outcome.rawValue)",
+                            report.outcome == .success ? "Cleanup verified" : "Cleanup needs attention: \(report.outcome.rawValue)",
                             systemImage: report.outcome == .success
                                 ? "checkmark.seal.fill"
                                 : "exclamationmark.octagon.fill"
@@ -946,11 +952,13 @@ struct GhostRepairBulkInventorySheet: View {
                         )
                         terminalRowsView(report)
                         if report.outcome == .success {
-                            GlobalStateCleanupReviewSection(report: report)
+                            DisclosureGroup("Optional: remaining session settings") {
+                                GlobalStateCleanupReviewSection(report: report)
+                            }
                         }
                         Text(report.outcome == .success
-                            ? "Conversation cleanup is verified. Global-state cleanup is a separate optional review below; it has not been included in this Report. After any additional cleanup, reopen Codex once and verify the processed IDs stay absent from the sidebar, Search, and Archived. If any item returns, do not run Ghost Delete again."
-                            : "This Report is terminal. Do not retry or restore from this screen."
+                            ? "Cleanup is complete. Reopen Codex and check that these conversations stay absent from the sidebar, Search, and Archived. Optional session settings can be reviewed separately above. If a conversation returns, keep this result and ask for help before cleaning again."
+                            : "Cleanup did not complete successfully. Keep this result for review; do not repeat the cleanup or restore data from this screen."
                         )
                         .font(.caption.bold())
                         .foregroundStyle(.secondary)
@@ -1013,12 +1021,22 @@ struct GhostRepairBulkInventorySheet: View {
         .frame(maxHeight: 150)
     }
 
+    private var isDeletionFollowUp: Bool { model.nativeDeleteDesktopCleanupTitle != nil }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Bulk Ghost Delete", systemImage: "list.bullet.clipboard")
-                .font(.title.bold())
+            Group {
+                if isDeletionFollowUp {
+                    Label("Finish Conversation Cleanup", systemImage: "list.bullet.clipboard")
+                } else {
+                    Label("Bulk Ghost Delete", systemImage: "list.bullet.clipboard")
+                }
+            }
+            .font(.title.bold())
             Text(
-                "Scan for Ghosts, review the items to keep or clear, and confirm once. After you close Codex, the App checks the data, verifies a backup, clears the confirmed batch, and shows the results."
+                isDeletionFollowUp
+                    ? "Your conversations have been deleted. Finish removing their remaining Desktop records in three steps: check, close Codex, then view the result."
+                    : "Scan for Ghosts, review the items to keep or clear, and confirm once. After you close Codex, the App checks the data, verifies a backup, clears the confirmed batch, and shows the results."
             )
             .foregroundStyle(.secondary)
         }
@@ -1027,35 +1045,40 @@ struct GhostRepairBulkInventorySheet: View {
     private var snapshotInput: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let inventory = model.ghostRepairBulkInventory {
-                GroupBox(model.ghostRepairBulkCompletedScanReport == nil
-                    ? "Verified current scan" : "Scan reconciled with cleanup result") {
-                    HStack {
-                        Label(
-                            model.ghostRepairBulkCompletedScanReport?.outcome == .success
-                                ? "Cleanup complete" : "Scan complete",
-                            systemImage: "checkmark.shield.fill"
-                        )
-                        .foregroundStyle(.green)
-                        Spacer()
-                        Text("\(model.ghostRepairBulkRemainingItems.filter(\.selectable).count) eligible remaining")
+                if !isDeletionFollowUp {
+                    GroupBox(model.ghostRepairBulkCompletedScanReport == nil
+                        ? "Verified current scan" : "Scan reconciled with cleanup result") {
+                        HStack {
+                            Label(
+                                model.ghostRepairBulkCompletedScanReport?.outcome == .success
+                                    ? "Cleanup complete" : "Scan complete",
+                                systemImage: "checkmark.shield.fill"
+                            )
+                            .foregroundStyle(.green)
+                            Spacer()
+                            Text("\(model.ghostRepairBulkRemainingItems.filter(\.selectable).count) eligible remaining")
+                        }
                     }
-                }
-                if model.ghostRepairBulkCompletedScanReport == nil {
-                    Toggle("Manual confirmation / force cleanup of known session residue", isOn: Binding(
-                        get: { model.ghostRepairBulkInventory?.manualReviewEnabled == true },
-                        set: { model.setGhostRepairManualReviewEnabled($0) }
-                    ))
-                    .disabled(model.ghostRepairCleanupState != .idle || isBusy
-                        || model.ghostRepairBulkWorkflowMutationBlockedReason != nil
-                        || model.nativeDeleteDesktopCleanupSelectionBlockedReason != nil)
-                    .accessibilityIdentifier("manualGhostResidueReview")
-                    if inventory.manualReviewEnabled {
-                        Text("Selected session summaries will also be deleted. Automation settings and schedules stay unchanged. Readable, unconfirmed, pinned and parent sessions remain protected. Review the selected IDs before confirming.")
-                            .font(.caption).foregroundStyle(.orange)
+                    if model.ghostRepairBulkCompletedScanReport == nil {
+                        Toggle("Review additional cleanup", isOn: Binding(
+                            get: { model.ghostRepairBulkInventory?.manualReviewEnabled == true },
+                            set: { model.setGhostRepairManualReviewEnabled($0) }
+                        ))
+                        .disabled(model.ghostRepairCleanupState != .idle || isBusy
+                            || model.ghostRepairBulkWorkflowMutationBlockedReason != nil
+                            || model.nativeDeleteDesktopCleanupSelectionBlockedReason != nil)
+                        .accessibilityIdentifier("manualGhostResidueReview")
+                        if inventory.manualReviewEnabled {
+                            Text("Review the summary count on each item, then select the eligible items again. Cleanup includes those selected summaries; automation settings and schedules stay unchanged. Other protection checks still apply.")
+                                .font(.caption).foregroundStyle(.orange)
+                        } else {
+                            Text("Remaining conversation summaries are kept by default. Turn this on to review summaries and supported records from paused automations for cleanup. Changing this option clears your selection; it does not delete anything.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             } else {
-                GroupBox("Find Ghosts") {
+                GroupBox(isDeletionFollowUp ? "1. Check remaining records" : "Find Ghosts") {
                     HStack(spacing: 12) {
                         preparationStatus
                         Spacer()
@@ -1079,7 +1102,7 @@ struct GhostRepairBulkInventorySheet: View {
                                 }
                             } else {
                                 Label(
-                                    "Scan for Ghosts",
+                                    isDeletionFollowUp ? "Check Again" : "Scan for Ghosts",
                                     systemImage: "wand.and.stars"
                                 )
                             }
@@ -1141,18 +1164,8 @@ struct GhostRepairBulkInventorySheet: View {
                                         desktopCleanupColor(target.state)
                                     )
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(target.nativeSessionID)
-                                            .font(
-                                                .system(
-                                                    .caption,
-                                                    design: .monospaced
-                                                )
-                                            )
-                                            .textSelection(.enabled)
+                                        sessionIdentity(threadID: target.nativeSessionID)
                                         HStack(spacing: 8) {
-                                            if let category = target.category {
-                                                Text(categoryLabel(category))
-                                            }
                                             Text(target.message)
                                         }
                                         .foregroundStyle(.secondary)
@@ -1163,43 +1176,48 @@ struct GhostRepairBulkInventorySheet: View {
                     }
                     .frame(maxHeight: 160)
                     HStack {
-                        Button("Cancel Desktop Cleanup Handoff", role: .cancel) {
-                            model.cancelNativeDeleteDesktopCleanupHandoff()
+                        if model.nativeDeleteDesktopCleanupCancelBlockedReason == nil {
+                            Button("Finish Later", role: .cancel) {
+                                model.cancelNativeDeleteDesktopCleanupHandoff()
+                                _ = model.setGhostRepairBulkInventoryPresented(false)
+                            }
+                            .disabled(
+                                isDesktopCleanupStatusRequestInFlight
+                                    || isLinkedDesktopCleanupPrepareInFlight
+                                    || model
+                                        .nativeDeleteDesktopCleanupCancelBlockedReason
+                                        != nil
+                            )
+                            .help(
+                                model.nativeDeleteDesktopCleanupCancelBlockedReason
+                                    ?? "Resume from this deletion in Report History when ready."
+                            )
                         }
-                        .disabled(
-                            isDesktopCleanupStatusRequestInFlight
-                                || isLinkedDesktopCleanupPrepareInFlight
-                                || model
-                                    .nativeDeleteDesktopCleanupCancelBlockedReason
-                                    != nil
-                        )
-                        .help(
-                            model.nativeDeleteDesktopCleanupCancelBlockedReason
-                                ?? "Cancel this exact manager-owned handoff without changing Codex sessions."
-                        )
                         Spacer()
-                        Button("Read Cleanup Status") {
-                            guard !isDesktopCleanupStatusRequestInFlight else {
-                                return
-                            }
-                            isDesktopCleanupStatusRequestInFlight = true
-                            Task {
-                                defer {
-                                    isDesktopCleanupStatusRequestInFlight = false
+                        if model.nativeDeleteDesktopCleanupStatusBlockedReason == nil {
+                            Button("Refresh Result") {
+                                guard !isDesktopCleanupStatusRequestInFlight else {
+                                    return
                                 }
-                                await model.readNativeDeleteDesktopCleanupStatus()
+                                isDesktopCleanupStatusRequestInFlight = true
+                                Task {
+                                    defer {
+                                        isDesktopCleanupStatusRequestInFlight = false
+                                    }
+                                    await model.readNativeDeleteDesktopCleanupStatus()
+                                }
                             }
+                            .disabled(
+                                isDesktopCleanupStatusRequestInFlight
+                                    || model
+                                        .nativeDeleteDesktopCleanupStatusBlockedReason
+                                        != nil
+                            )
+                            .help(
+                                model.nativeDeleteDesktopCleanupStatusBlockedReason
+                                    ?? "Read only the exact manager-owned status for the linked cleanup operation."
+                            )
                         }
-                        .disabled(
-                            isDesktopCleanupStatusRequestInFlight
-                                || model
-                                    .nativeDeleteDesktopCleanupStatusBlockedReason
-                                    != nil
-                        )
-                        .help(
-                            model.nativeDeleteDesktopCleanupStatusBlockedReason
-                                ?? "Read only the exact manager-owned status for the linked cleanup operation."
-                        )
                     }
                 }
                 .font(.caption)
@@ -1218,7 +1236,8 @@ struct GhostRepairBulkInventorySheet: View {
         switch model.ghostRepairBulkPreparationState {
         case .idle:
             Text(
-                "One click reads the current local catalog, confirms local-state absence, verifies every candidate with an exact Codex read, and classifies the complete catalog."
+                isDeletionFollowUp ? "Check the remaining records for the conversations you already deleted."
+                    : "One click reads the current local catalog, confirms local-state absence, verifies every candidate with an exact Codex read, and classifies the complete catalog."
             )
             .foregroundStyle(.secondary)
         case let .preparing(stage):
@@ -1228,7 +1247,7 @@ struct GhostRepairBulkInventorySheet: View {
             Label("Ghost inventory is ready", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         case let .blocked(message):
-            Label(message, systemImage: "exclamationmark.triangle.fill")
+            Label(isDeletionFollowUp ? "Check paused — see the reason below" : message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
         }
     }
@@ -1243,27 +1262,54 @@ struct GhostRepairBulkInventorySheet: View {
             )
         case .idle:
             ContentUnavailableView(
-                "Ready to prepare the complete inventory",
+                isDeletionFollowUp ? "Ready to check remaining records" : "Ready to prepare the complete inventory",
                 systemImage: "list.bullet.clipboard",
                 description: Text(
-                    "Press Prepare Ghost Inventory once. The App performs the two-signal check and complete classification automatically."
+                    isDeletionFollowUp ? "Use Check Again above to continue with your saved deletion."
+                        : "Press Scan for Ghosts once. The App checks and classifies the current catalog automatically."
                 )
             )
         case .observing:
             ContentUnavailableView {
-                Label("Reading complete evidence…", systemImage: "hourglass")
+                Label(isDeletionFollowUp ? "Checking deleted conversations…" : "Reading complete evidence…", systemImage: "hourglass")
             } description: {
                 Text(
-                    "The result appears only if the complete local catalog, official inventory, pin, descendant, and exact-read evidence agrees."
+                    isDeletionFollowUp ? "Keep Codex open until this check finishes."
+                        : "The result appears only if the complete local catalog, official inventory, pin, descendant, and exact-read evidence agrees."
                 )
             }
         case let .ready(inventory):
-            inventoryContent(inventory)
+            if isDeletionFollowUp {
+                if model.ghostRepairCleanupState == .idle,
+                   model.nativeDeleteDesktopAbsenceVerifiedReportID == nil {
+                    GroupBox("2. Continue cleanup") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("The conversations above stay selected. Continue, then quit Codex when prompted. ASM will check a backup before clearing their remaining records.")
+                            Button("Continue Cleanup…", role: .destructive) {
+                                cleanupSelection = model.ghostRepairBulkSelection
+                                cleanupInventoryDigest = inventory.inventoryDigest
+                                isCleanupConfirmationPresented = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.canContinueNativeDeleteDesktopCleanup || isSavingPreview)
+                            .accessibilityIdentifier("confirmGhostCleanup")
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } else {
+                inventoryContent(inventory)
+            }
         case let .unavailable(_, stage):
-            unavailable(
-                title: "No inventory was shown",
-                detail: failureExplanation(stage)
-            )
+            if isDeletionFollowUp {
+                Text(failureExplanation(stage))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                unavailable(
+                    title: "No inventory was shown",
+                    detail: failureExplanation(stage)
+                )
+            }
         }
     }
 
@@ -1279,6 +1325,9 @@ struct GhostRepairBulkInventorySheet: View {
                 metric("Not ghosts", inventory.notGhostItemCount)
                 Spacer()
             }
+            Text("Counts overlap: Confirmed ghosts includes eligible and blocked items. Blocked ghosts also appear in Kept / unresolved.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Picker("Show", selection: $model.ghostRepairBulkFilter) {
                 ForEach(CodexGhostRepairInventoryFilter.allCases, id: \.self) { filter in
@@ -1559,8 +1608,10 @@ struct GhostRepairBulkInventorySheet: View {
                 HStack(spacing: 8) {
                     Label(
                         item.initiallyAbsent == true ? "Already clear"
+                            : needsSummaryReview(item) ? "Needs summary review"
                             : item.retentionExplanation ?? dispositionLabel(item.disposition),
-                        systemImage: dispositionSymbol(item.disposition)
+                        systemImage: needsSummaryReview(item) ? "doc.text.magnifyingglass"
+                            : dispositionSymbol(item.disposition)
                     )
                     .foregroundStyle(dispositionColor(item.disposition))
                     if let category = item.category {
@@ -1570,7 +1621,7 @@ struct GhostRepairBulkInventorySheet: View {
                 }
                 .font(.caption)
                 if let scope = item.reviewedResidue {
-                    Text("Manual review: delete \(scope.summaryRowDigests.count) session summary record(s); preserve automation settings.")
+                    Text("Cleanup will include \(scope.summaryRowDigests.count) summary record(s) for this conversation. Automation settings and schedules are kept.")
                         .font(.caption).foregroundStyle(.orange)
                 }
                 if !item.blockers.isEmpty {
@@ -1610,7 +1661,7 @@ struct GhostRepairBulkInventorySheet: View {
             }
             HStack {
                 Label(
-                    model.ghostRepairBulkCompletedScanReport == nil
+                    isDeletionFollowUp ? deletionFollowUpFooter : model.ghostRepairBulkCompletedScanReport == nil
                         ? "Confirm the selected batch once, close Codex, then continue. Checks and a verified backup complete before cleanup."
                         : model.ghostRepairBulkCompletedScanReport?.outcome == .success
                             ? "Cleanup complete. Results are kept above. Start a new scan before another cleanup."
@@ -1621,14 +1672,16 @@ struct GhostRepairBulkInventorySheet: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 Spacer()
-                Button("New Scan") {
-                    _ = model.startNewGhostRepairBulkPreparation()
+                if !isDeletionFollowUp {
+                    Button("New Scan") {
+                        _ = model.startNewGhostRepairBulkPreparation()
+                    }
+                    .disabled(
+                        isBusy
+                            || !model.canStartNewGhostRepairBulkPreparation
+                    )
+                    .accessibilityIdentifier("startNewBulkGhostPreparation")
                 }
-                .disabled(
-                    isBusy
-                        || !model.canStartNewGhostRepairBulkPreparation
-                )
-                .accessibilityIdentifier("startNewBulkGhostPreparation")
                 Button("Close") {
                     _ = model.setGhostRepairBulkInventoryPresented(false)
                 }
@@ -1644,6 +1697,19 @@ struct GhostRepairBulkInventorySheet: View {
             return true
         }
         return false
+    }
+
+    private var deletionFollowUpFooter: String {
+        if model.nativeDeleteDesktopAbsenceVerifiedReportID != nil {
+            return "The check found no remaining Desktop records. You can close this window."
+        }
+        switch model.ghostRepairCleanupState {
+        case .awaitingShutdown: return "Quit Codex, then continue above. Keep ASM open."
+        case .preparing, .running: return "Keep ASM open until the result appears."
+        case .finished: return "Review the result above, then reopen Codex to confirm."
+        case .stopped: return "Your deletion result is saved. Review the cleanup result before continuing."
+        case .idle: return "Your deletion result is saved. A backup is verified before cleanup."
+        }
     }
 
     private var showsFinalRepairStage: Bool {
@@ -1745,11 +1811,13 @@ struct GhostRepairBulkInventorySheet: View {
         case .snapshotRead:
             "The exact published snapshot could not be read safely."
         case .canonicalSourceRead:
-            "The current local Codex databases could not be copied and read safely."
+            "The local data could not be read safely. Open Settings → Logs for the stopped check and share its details. Cleanup has not started."
+        case .canonicalSourceBusy:
+            "Codex was updating its data during the check. Wait for active work to finish, then try again. Cleanup has not started."
         case .officialInventory:
             "Codex did not return one complete, compatible inventory."
         case .snapshotProfile:
-            "The current Codex runtime and local database profile are not an admitted pair."
+            "This Codex version or data format needs an ASM compatibility update. Cleanup has not started."
         case .presentControl:
             "The safety control read did not match the current Codex inventory."
         case .candidateExactRead:
@@ -1761,6 +1829,13 @@ struct GhostRepairBulkInventorySheet: View {
         case .unavailable:
             "This build does not provide the packaged read-only inventory scanner yet."
         }
+    }
+
+    private func needsSummaryReview(_ item: CodexGhostRepairBulkInventoryItem) -> Bool {
+        !isDeletionFollowUp
+            && model.ghostRepairBulkInventory?.manualReviewEnabled == false
+            && item.disposition == .blocked
+            && item.blockers == [.summaryRecordsPresent]
     }
 
     private func dispositionLabel(
@@ -1816,7 +1891,14 @@ struct GhostRepairBulkInventorySheet: View {
         case .descendantsPresent: "Has child sessions"
         case .unsupportedRowShape: "Automation or catalog state is outside the supported cleanup policy"
         case .sideReferencesPresent: "Related records still exist"
-        case .summaryRecordsPresent: "Conversation summaries still exist — kept"
+        case .summaryRecordsPresent:
+            if isDeletionFollowUp {
+                "Conversation summaries remain and could not be included in this cleanup."
+            } else if model.ghostRepairBulkInventory?.manualReviewEnabled == true {
+                "Remaining summaries could not be verified for cleanup — kept."
+            } else {
+                "Summaries are kept by default. Turn on Review additional cleanup above, then select this item if it becomes eligible."
+            }
         }
     }
 }

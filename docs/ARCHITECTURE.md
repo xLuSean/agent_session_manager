@@ -67,6 +67,14 @@ Final Review 後、執行前，manager 保存不可替換的 canonical-to-Bulk b
 
 掃描以 version-bound 本機 canonical 資料的私人暫存副本、官方 exact read 及完整保護清單分類；正式入口另有存在對話的 present control，讀取控制失敗不發布部分可操作清單。不建立長期 Snapshot 或要求 Deleted witness。
 
+即時掃描優先以 APFS 檔案複製取得副本；不支援時使用一般資料複製，兩者都須核對全組固定檔案在取得副本前後的存在性、inode、權限、大小、mtime、ctime 與 generation。期間變動就停止。`-shm` 僅為 SQLite 協調狀態，不複製，讓 SQLite 在私人工作目錄重建。完成擷取後才在副本計算雜湊與查詢；之後的正常 Codex 寫入不使既有副本失效。擷取指紋描述實際複製的集合，不替代正式備份；關閉 Codex、完整備份及交易前重驗維持原流程。來源忙碌、結構失敗等階段以固定代碼記錄，沒有原始錯誤、路徑或資料內容。
+
+關閉後的維護觀察也從這份受保護的私人副本取得 authority，避免 SQLite 唯讀連線更動 canonical WAL／SHM 後又觸發自身的指紋變動判定。私人副本缺少全部附屬檔時使用單檔唯讀；有 WAL／journal 時保持正常 SQLite 語意。正式交易前後的目標檢查若遇到無附屬檔的來源，必須先原子取得 macOS `O_EXLOCK | O_NONBLOCK`，在鎖內以 `immutable=1` 唯讀並核對來源身分與附屬檔前後均未變動；既有交易鎖不可繞過。交易內仍使用原寫入連線觀察選取資料，不改寫入或備份規則。
+
+主畫面 Desktop 狀態列的 Previous Deletions 只分頁讀取 manager 保存的成功刪除與 linkage 狀態。它不依賴目前可見的 session 清單，也不自動執行官方讀取或清理。選取原報告後仍經過 consumed preview、原項目集與成功 absent 結果驗證，再沿用原接續流程；已完成與結果不明的狀態不互換。
+
+主畫面狀態與批次 workflow 分開：啟動、手動刷新、回到 App（至少間隔一分鐘）及關閉完成結果時，由 model 呼叫一次既有唯讀全域觀察。只保留記憶體中的數量與時間，不把觀察結果當作 Preview、選取或確認權限；失敗覆蓋舊摘要，不發布部分清單。背景觀察合併重入；使用者啟動批次掃描先等觀察結束，避免同一 reader 競爭。未完成的 protected operation／Delete handoff 暫停背景檢查，主入口只接續原批次。已完成的上下文經既有 reset gate 退出後，才開始全域掃描。主入口不依賴 Settings 捷徑偏好，該次使用只在記憶體啟用 workflow。
+
 畫面 scan identity、selection 與 inventory digest 共同凍結範圍。使用者確認一次，App 內部保存 Preview、challenge、receipt；awaitingShutdown 後的繼續按鈕承接相同授權，不是第二次確認。Final Review 才取得驗證備份並準備一次執行。
 
 | 階段 | 可做的事與限制 |
@@ -78,7 +86,7 @@ Final Review 後、執行前，manager 保存不可替換的 canonical-to-Bulk b
 | terminal | 查看原結果；新掃描不會重啟舊操作 |
 | closed_before_attempt | 明確關閉未執行計畫，不冒充刪除成功 |
 
-preparing／running 期間同步送出鎖與 model guard 同時防重入，並阻擋選取、dismiss、disable 和 reset。成功結果更新待處理清單與計數，保留報告；不背景重新掃描。
+preparing／running 期間同步送出鎖與 model guard 同時防重入，並阻擋選取、dismiss、disable 和 reset。成功結果更新該次掃描的待處理清單與計數並保留報告；關閉結果後才另做主畫面唯讀檢查，不重寫凍結範圍或報告。
 
 ## 恢復與未執行計畫關閉
 

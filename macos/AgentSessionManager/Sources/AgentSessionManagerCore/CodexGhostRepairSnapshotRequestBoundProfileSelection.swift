@@ -55,6 +55,8 @@ struct CodexGhostRepairSnapshotRequestBoundProfileSelection:
         case "0.153.1", "codex-cli 0.153.1",
              "0.153.2", "codex-cli 0.153.2":
             .v153DesktopV34
+        case "0.156.1", "codex-cli 0.156.1", "0.157.1", "codex-cli 0.157.1", "0.158.0-alpha.2.1", "codex-cli 0.158.0-alpha.2.1":
+            .v156DesktopV34Extended
         case "0.153.4", "codex-cli 0.153.4":
             .v1534DesktopV34
         default:

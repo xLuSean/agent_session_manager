@@ -3,6 +3,45 @@ import Foundation
 import XCTest
 
 final class CodexGhostRepairBulkInventoryCoordinatorTests: XCTestCase {
+    func testCanonicalScanFailureKeepsSafeReasonAndDoesNotReadOrPublishPartialCandidates() async throws {
+        for reason in [CodexGhostRepairSnapshotAnalysisFailurePoint.canonicalCaptureDrift, .desktopContract, .unexpected] {
+            let recorder = Recorder()
+            let coordinator = CodexGhostRepairBulkLiveScanCoordinator(
+                liveReader: FailingLiveCatalogFake(point: reason),
+                transport: TransportFake(recorder: recorder,
+                    inventoryValue: makeOfficialInventory(runtimeVersion: "0.153.4"), exactValues: [:]),
+                absenceRegistry: .packagedReviewedV1())
+            let outcome = await coordinator.observe(request: makeRequest())
+            guard case let .unavailable(_, failure) = outcome else {
+                return XCTFail("Expected no partial inventory")
+            }
+            XCTAssertEqual(failure.stage, reason == .canonicalCaptureDrift ? .canonicalSourceBusy : .canonicalSourceRead)
+            XCTAssertEqual(failure.readerReason, reason.failureReason)
+            XCTAssertFalse(failure.rawErrorIncluded)
+            XCTAssertFalse(failure.partialInventoryPresented)
+            XCTAssertFalse(failure.automaticRetry)
+            let calls = await recorder.values()
+            XCTAssertEqual(calls, ["inventory"])
+            XCTAssertFalse(String(decoding: try JSONEncoder().encode(failure), as: UTF8.self).contains("private-path"))
+        }
+        let old = try JSONDecoder().decode(CodexGhostRepairBulkInventoryFailure.self,
+            from: Data(#"{"stage":"canonical-source-read"}"#.utf8))
+        XCTAssertNil(old.readerReason)
+    }
+
+    func testUnknownRuntimeShowsCompatibilityFailureBeforeCanonicalRead() async {
+        let recorder = Recorder()
+        let coordinator = CodexGhostRepairBulkLiveScanCoordinator(
+            liveReader: FailingLiveCatalogFake(point: .unexpected),
+            transport: TransportFake(recorder: recorder,
+                inventoryValue: makeOfficialInventory(runtimeVersion: "0.157.2"), exactValues: [:]),
+            absenceRegistry: .packagedReviewedV1())
+        let outcome = await coordinator.observe(request: makeRequest())
+        assertUnavailable(outcome, stage: .snapshotProfile)
+        let calls = await recorder.values()
+        XCTAssertEqual(calls, ["inventory"])
+    }
+
     private let snapshotReference =
         "2deddc76-ba46-4eb5-b0f0-7aac17ce2790"
     private let eligibleA = "019f64d8-4be2-7c60-91ba-8687501cfd66"
@@ -888,6 +927,18 @@ private struct LiveCatalogFake: CodexGhostRepairBulkLiveCatalogReading {
         profile _: CodexGhostRepairSnapshotSourceProfile
     ) throws -> CodexGhostRepairBulkCatalogQueryReadback {
         readback
+    }
+}
+
+private struct FailingLiveCatalogFake: CodexGhostRepairBulkLiveCatalogReading {
+    let point: CodexGhostRepairSnapshotAnalysisFailurePoint
+
+    func read(profile: CodexGhostRepairSnapshotSourceProfile) throws -> CodexGhostRepairBulkCatalogQueryReadback {
+        if point == .unexpected {
+            throw NSError(domain: "private-path", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "private-path and private row values"])
+        }
+        throw CodexGhostRepairSnapshotAnalysisReadError(point: point)
     }
 }
 

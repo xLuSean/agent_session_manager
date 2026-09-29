@@ -34,13 +34,25 @@ Codex 0.153.4 有些對話因摘要為空而漏列，但仍能依 ID 讀取。AS
 
 主列表的 Size 會背景加總同一 ID 在 `sessions` 與 `archived_sessions` 的新舊對話檔；詳細資訊顯示相同數字。列表上方的 Sort 可選 Recently updated、Conversation size: largest first 或 smallest first。排序不改變搜尋與勾選，未知大小固定排最後。
 
+列表上方的 **All sessions** 顯示最近載入清單中所有 Codex 對話的檔案總大小，涵蓋各專案、Active、Archive、Trash Bin 與 Deleted 目前仍有的檔案，不受搜尋、篩選或勾選影響。同一 ID 只計一次，沿用各列的大小資料，不另外掃描磁碟；未被清單辨識的檔案不包含在這個總計中。
+
+讀取期間顯示 **Calculating…**；部分大小未知時顯示 **At least** 加上已知容量，以及已量測／全部筆數。全部無法量測時顯示 **Unavailable**，不當成 0 B。重新整理會一起更新各列與總計。
+
 Size 欄顯示對話檔的邏輯大小，不包含專案、共用資料庫、備份及操作報告，也不是保證可回收的磁碟空間。Deleted 列同樣檢查目前剩餘檔案，不顯示刪除前的歷史大小。一般檔名直接量測檔案資訊；同一檔名包含多個 ID 時，ASM 以第一行的 session metadata 確認真正歸屬，不會將同一檔案重複算給不同 ID。每份檔頭最多讀取 256 KiB、整次掃描最多讀取 64 MiB，不會載入整份大型對話。
 
-「—」表示尚未算完、讀取失敗、歸屬衝突或達到讀取上限，不代表檔案很小或為零。掃描完成後，列表上方顯示目前篩選範圍內無法量測的筆數；將游標停在「—」可看原因，詳細資訊也會顯示原因。「0 B」表示本次盤點未找到有大小的匹配對話檔，不是完整刪除驗證。結果保存在記憶體，對話持續增加內容時可按重新整理更新。
+「—」表示尚未算完、讀取失敗、歸屬衝突或達到讀取上限，不代表檔案很小或為零。將游標停在「—」可看原因，詳細資訊也會顯示原因。「0 B」表示本次盤點未找到有大小的匹配對話檔，不是完整刪除驗證。結果保存在記憶體，對話持續增加內容時可按重新整理更新。
 
-人工檢查不必刪對話：比較一筆對話在列表及詳細資訊的大小，再切換兩種大小排序，確認搜尋結果與勾選不變；清除搜尋後選 Recently updated 回到原本順序。
+人工檢查不必刪對話：比較一筆對話在列表及詳細資訊的大小，再切換兩種大小排序，確認搜尋結果與勾選不變；切換專案、狀態或搜尋時，All sessions 總計應保持相同。清除搜尋後選 Recently updated 回到原本順序。
 
 ## 檢查 Codex 相容性
+
+### 測試結果與功能可用性
+
+Feature availability 顯示各功能目前是否可用；Interface checks、Desktop database checks 與 Isolated behavior tests 分別列出實際測試結果。某項測試通過仍顯示綠色，不會因正式 Desktop 清理尚未開放而變成失敗。
+
+新版 Desktop 若只通過結構及 SQL 測試，正式清理會顯示 **Not enabled for this Codex version**，並明確說明需要完成 Desktop、正式備份與重開驗收後更新 ASM。這個狀態無法透過重跑隔離測試或再刪一筆對話解除。CLI 隔離測試尚未執行、測試失敗，以及資料無法讀取，則各自顯示對應原因與下一步。
+
+不開 App 的檢查入口是 `./scripts/check_codex_compatibility.sh`：與 App 共用核心測試，但獨立保存報告，不改變 App 的快取或功能開放狀態。需要 macOS 開發工具及 repository 原始碼；完整指令、輸出位置與結束碼見[開發指南](DEVELOPMENT.md#與-app-共用的檢查與隔離測試)。此入口不執行真正 Desktop 的清理或重啟。
 
 ### 0.1.106 候選：新版 Desktop 安裝格式與結構
 
@@ -109,10 +121,20 @@ ASM 的檢查規則更新也會讓舊結果失效。本次規則版本升至 4�
 
 Ghost 是官方對話已不存在、Desktop 仍留索引等資料的情況；不是所有未顯示的對話，也不是備份或 ASM log。
 
-1. 開啟 Settings → General → Ghost Delete。
-2. 開啟 Enable Bulk Ghost Delete，再按 Open Bulk Ghost Delete…。
-3. **實際按一次 Scan for Ghosts**，等到 Scan complete。只開視窗不等於已掃描。
-4. 先看分類與保留原因；掃描不代表已備份或已清除。
+主畫面頂端直接顯示 Desktop 殘留狀態。ASM 開啟、按 Refresh，或回到 App 時距離上次檢查已超過一分鐘，就會做一次唯讀檢查；沒有定時輪詢或自動清理。檢查涵蓋各專案，不受目前清單的搜尋、篩選或選取影響，也不需要先到 Settings 開啟功能。
+
+- 找到 Ghost：顯示總數、可清理數與最近檢查時間；有 Ghost 不代表每一筆都可清理。
+- 尚有無法確認的項目：顯示需要檢查，不當作零殘留。仍有正常本機對話資料的保留項目不算成 Ghost。
+- 完整檢查未找到 Ghost：顯示 **No Desktop ghosts found** 與檢查時間；這是當次結果。
+- 檢查失敗：顯示 **Could not check Desktop residue**，不沿用舊的「沒有 Ghost」結果。
+
+1. 按主畫面的 **Review Ghosts…**，直接開啟批次清理並重新掃描。
+2. 等到 Scan complete，查看分類與保留原因，再選擇要清理的項目。
+3. 依下方批次步驟確認、關閉 Codex 並完成清理。掃描本身不代表已備份或已清除。
+
+已有尚未完成或結果不明的清理時，主畫面改顯示 **Continue Cleanup…**，回到原批次，不建立替代操作。關閉已完成的結果視窗後，主畫面重新檢查整體殘留；某一批成功不會直接把所有 Ghost 當成已清除。已完成的單筆刪除接續不再卡住後續的全域批次入口。
+
+Settings → General → Ghost Delete 的舊入口仍保留；從該入口開啟視窗後需按 **Scan for Ghosts**。
 
 掃描階段 Codex 可先開著，不需要先刪一般對話、建立 Snapshot 或手動貼 UUID。
 
@@ -126,6 +148,8 @@ Ghost 是官方對話已不存在、Desktop 仍留索引等資料的情況；不
 
 Confirmed ghosts 與其他分類重疊，不要把五個數字全部相加。Eligible 為 0 時不能清除；搜尋沒有結果也不等於沒有 Ghost。
 
+例如 Observed 30、Confirmed ghosts 8、Eligible 0、Kept / unresolved 10、Not ghosts 20，代表 20 筆非 Ghost、8 筆已確認但清理受阻的 Ghost，以及 2 筆尚未確認或需要保留的項目。8 已包含在 10 裡；總數是 20 + 8 + 2 = 30。畫面計數下方也會提醒分類有重疊。
+
 Show 分類選單預設顯示 Needs attention，隱藏正常對話。可切換 Eligible ghosts、Blocked ghosts、Local session data — kept、Other unconfirmed、Active、Archive 或 All scanned items；每類顯示剩餘筆數。Active／Archive 依本次官方掃描分類，不依 ASM 舊狀態猜測。篩選只改變顯示，不跳過安全檢查，也不變更選取。
 
 用明顯標示的搜尋欄查 title、完整 ID、blocked 或 unconfirmed：
@@ -136,12 +160,15 @@ Show 分類選單預設顯示 Needs attention，隱藏正常對話。可切換 E
 | Exact read skipped because local session data exists | 因資料仍在略過讀取，不是讀取失敗 |
 | Codex can read this session — kept | 官方讀得到對話，不允許清除 |
 | Exact-read absence could not be verified | 不存在證據不足，不推論為資料損壞 |
-| Conversation summaries still exist — kept | 一般模式保留摘要，可另檢視人工確認模式 |
+| Needs summary review | 目前只因摘要殘留而暫時保留；開啟上方 Review additional cleanup，再查看是否符合清理條件 |
+| Remaining summaries could not be verified for cleanup — kept | 已開啟額外清理檢視，但摘要仍無法通過檢查，繼續保留 |
 | Automation or catalog state is outside the supported cleanup policy | 不符合既有清理規則，不等於資料庫損壞 |
 
-### 人工確認／強制清除
+### 確認一併清理摘要等殘留
 
-Manual confirmation / force cleanup of known session residue 預設關閉；切換模式會清空選取，需要重選。
+**Review additional cleanup** 預設關閉。一般模式保留剩餘的對話摘要，所以已確認的 Ghost 仍可能暫時不能勾選；只因這個原因保留的項目會顯示 **Needs summary review**，並說明下一步。
+
+開啟這個選項後，ASM 重新判斷摘要與支援的暫停自動化紀錄是否可清理。切換模式會清空選取，但不會刪除資料；需重新勾選符合資格的項目。每筆會列出將一併清理的摘要數，再依下方批次步驟核對範圍並確認。若仍顯示 Blocked，代表另有未通過的檢查，不能直接清理。
 
 它只放行已知、限定範圍的 session 摘要與受支援的暫停排程案例；列上會顯示待刪摘要數。可讀對話、本機仍有資料、證據不足、置頂、有子對話或其他不支援的關聯仍受保護，並非略過所有檢查。
 
@@ -184,6 +211,16 @@ Terminal outcome: success 必須涵蓋完整確認範圍。成功項目只留在
 - 兩份 JSON 各自原子更新，不是跨檔交易；中斷可能部分完成，保留備份，不自動重試或還原。
 
 備份位於 ASM Application Support 的 GlobalStateCleanup/<preview ID>/，含舊私人資料，目前不自動清除。這不是安全抹除；不要把私人 diff 或備份提交到公開 repo。
+
+### 更新 Codex 後接續未完成的清理
+
+若官方刪除已成功，但 Desktop 清理尚未完成，從主畫面 Desktop 狀態列右側的選單選 **Previous Deletions…**，依對話名稱與刪除時間找到原本的刪除，再按 **Review Cleanup…**。不必選取已消失的對話或先找 Report History；重開 ASM 後仍可使用。如果已有進行中的清理，這個入口直接回到目前步驟。
+
+清單讀取 ASM 保存的結果，不會自動掃描或清理 Codex。**Cleanup not yet checked** 代表尚無已驗證結果，不表示一定有殘留；結果不明與已完成會分開顯示。較早的刪除可按 **Load Earlier Deletions**。Report History 的原 Delete 報告頂端也保留 **Finish Cleanup…**。兩個入口都沿用原本成功刪除的範圍，不再送出 Delete；依畫面要求退出 Codex Desktop／CLI，讓 ASM 備份並清理剩餘資料。
+
+接續視窗 **Finish Conversation Cleanup** 會保留原本的對話選取，依序引導檢查、關閉 Codex、查看結果。檢查完成後按 **Continue Cleanup…** 確認；退出 Codex 並保持 ASM 開啟，再按 **Codex Is Closed — Start Cleanup**。不必重新搜尋或勾選 Ghost。若資料仍在更新，等工作結束後按 **Check Again**；尚未開始清理時可選 **Finish Later**，日後從主畫面的 **Continue Cleanup…** 接續。復原操作收在 **Advanced details and recovery**。
+
+清理會移除該對話的本機目錄項目；若它來自自動化，會封存對應的執行紀錄並保留自動化定義與排程。完成後重新開啟 Codex，再確認該對話未重新出現。功能相容性的綠色表示這版 ASM 支援目前環境，個別清理結果仍以該次操作報告為準。
 
 ## Deleted 與操作紀錄
 

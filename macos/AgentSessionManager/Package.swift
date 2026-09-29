@@ -8,6 +8,7 @@ let package = Package(
         .macOS(.v14),
     ],
     products: [
+        .executable(name: "asm-compatibility", targets: ["ASMCompatibilityCLI"]),
         .library(name: "AgentSessionManagerCore", targets: ["AgentSessionManagerCore"]),
         .library(
             name: "AgentSessionManagerFixtures",
@@ -26,6 +27,14 @@ let package = Package(
         .target(
             name: "AgentSessionManagerFixtures",
             dependencies: ["AgentSessionManagerCore"]
+        ),
+        .executableTarget(
+            name: "ASMCompatibilityCLI",
+            dependencies: ["AgentSessionManagerCore"]
+        ),
+        .testTarget(
+            name: "ASMCompatibilityCLITests",
+            dependencies: ["ASMCompatibilityCLI", "AgentSessionManagerCore"]
         ),
         .testTarget(
             name: "AgentSessionManagerCoreTests",

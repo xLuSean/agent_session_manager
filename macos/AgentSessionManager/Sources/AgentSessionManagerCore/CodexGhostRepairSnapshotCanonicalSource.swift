@@ -23,6 +23,12 @@ enum CodexGhostRepairSnapshotSourceLayout {
             || normalized == "codex-cli 0.153.2"
             || normalized == "0.153.4"
             || normalized == "codex-cli 0.153.4"
+            || normalized == "0.156.1"
+            || normalized == "codex-cli 0.156.1"
+            || normalized == "0.157.1"
+            || normalized == "codex-cli 0.157.1"
+            || normalized == "0.158.0-alpha.2.1"
+            || normalized == "codex-cli 0.158.0-alpha.2.1"
     }
 }
 
@@ -99,6 +105,15 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
             "sha256:75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85"
     )
 
+    /// Providers 0.156.1 and 0.157.1, Desktop bundled 0.158.0-alpha.2.1, extended v34
+    /// tables and timed thread items are one independently tested contract.
+    static let v156DesktopV34Extended = Self(
+        identifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v156SourceLayoutIdentifier,
+        ownerRuntimeProfileIdentifier: "desktop-bundled-0.158.0-alpha.2.1",
+        databaseSchemaProfileIdentifier: "desktop-v34-extended",
+        layoutDigest: "sha256:75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85"
+    )
+
     static func admitted(sourceLayoutIdentifier: String) -> Self? {
         switch sourceLayoutIdentifier {
         case v149DesktopV32.identifier: v149DesktopV32
@@ -106,6 +121,7 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
         case v152DesktopV34.identifier: v152DesktopV34
         case v153DesktopV34.identifier: v153DesktopV34
         case v1534DesktopV34.identifier: v1534DesktopV34
+        case v156DesktopV34Extended.identifier: v156DesktopV34Extended
         default: nil
         }
     }
@@ -134,6 +150,8 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
         case Self.v1534DesktopV34.identifier:
             return normalized == "0.153.4"
                 || normalized == "codex-cli 0.153.4"
+        case Self.v156DesktopV34Extended.identifier:
+            return ["0.156.1", "codex-cli 0.156.1", "0.157.1", "codex-cli 0.157.1", "0.158.0-alpha.2.1", "codex-cli 0.158.0-alpha.2.1"].contains(normalized)
         default:
             return false
         }
@@ -286,6 +304,11 @@ struct CodexGhostRepairSnapshotCanonicalFingerprint:
     }
 }
 
+struct CodexGhostRepairSnapshotAnalysisCaptureMetadata {
+    let sourceRootDigest: String
+    let files: [stat?]
+}
+
 struct CodexGhostRepairSnapshotCanonicalSourceCapabilities:
     Equatable,
     Sendable
@@ -407,6 +430,66 @@ struct CodexGhostRepairSnapshotCanonicalSource: Sendable {
             ),
             files: files
         )
+    }
+
+    /// Yields read-only descriptors for the fixed durable member set. The
+    /// consumer may copy them to its own destination; this source cannot write.
+    /// A metadata seal covers the whole capture, including ctime so restoring
+    /// an old modification time cannot hide a concurrent write.
+    func captureAnalysisMembers(
+        consume: (Int, CodexGhostRepairSnapshotCanonicalFile, Int32, stat) throws -> Void
+    ) throws -> CodexGhostRepairSnapshotAnalysisCaptureMetadata {
+        let roots = try validatedRoots()
+        func metadata() throws -> [stat?] {
+            try profile.files.map { file in
+                var status = stat()
+                let path = file.sourceURL(codexHomeURL: roots.codexHomeURL,
+                                          sqliteRootURL: roots.sqliteRootURL).path
+                guard lstat(path, &status) == 0 else {
+                    guard errno == ENOENT, !file.isRequiredDatabase else {
+                        throw CodexGhostRepairError.invalidProtectionEvidence("Required analysis source is unavailable.")
+                    }
+                    return nil
+                }
+                try Self.validateFile(status)
+                if file.isVolatileSharedMemory { return nil }
+                return status
+            }
+        }
+        let before = try metadata()
+        for (index, file) in profile.files.enumerated() {
+            guard let expected = before[index] else { continue }
+            let sourceURL = file.sourceURL(codexHomeURL: roots.codexHomeURL, sqliteRootURL: roots.sqliteRootURL)
+            let descriptor = Darwin.open(sourceURL.path, O_RDONLY | O_NOFOLLOW)
+            guard descriptor >= 0 else {
+                throw CodexGhostRepairError.targetDrift("Analysis source changed before capture.")
+            }
+            defer { Darwin.close(descriptor) }
+            var opened = stat()
+            guard fstat(descriptor, &opened) == 0, Self.stableCaptureIdentity(expected, opened) else {
+                throw CodexGhostRepairError.targetDrift("Analysis source changed before capture.")
+            }
+            try consume(index, file, descriptor, expected)
+        }
+        let after = try metadata()
+        guard zip(before, after).allSatisfy({ first, second in
+            switch (first, second) {
+            case (nil, nil): true
+            case let (first?, second?): Self.stableCaptureIdentity(first, second)
+            default: false
+            }
+        }) else {
+            throw CodexGhostRepairError.targetDrift("Analysis source changed during capture.")
+        }
+        _ = try validatedRoots()
+        return try .init(sourceRootDigest: CodexGhostRepairHasher.hash(roots.codexHomeURL.path), files: before)
+    }
+
+    private static func stableCaptureIdentity(_ first: stat, _ second: stat) -> Bool {
+        stableIdentity(first, second)
+            && first.st_ctimespec.tv_sec == second.st_ctimespec.tv_sec
+            && first.st_ctimespec.tv_nsec == second.st_ctimespec.tv_nsec
+            && first.st_gen == second.st_gen
     }
 
     /// Streams one member of the fixed set without exposing its URL or giving

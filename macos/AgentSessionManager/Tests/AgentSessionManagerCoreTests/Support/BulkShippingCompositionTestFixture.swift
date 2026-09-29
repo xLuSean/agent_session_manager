@@ -161,7 +161,8 @@ enum BulkShippingCompositionTestFixture {
         try createDesktop(
             at: desktopURL,
             itemCount: itemCount,
-            schema: desktopSchema
+            schema: desktopSchema,
+            extended: profile == .v156DesktopV34Extended
         )
         try createSideDatabase(
             at: summariesURL, schema: 2,
@@ -189,6 +190,18 @@ enum BulkShippingCompositionTestFixture {
             at: legacyURL, schema: 0,
             tables: ["CREATE TABLE legacy_sentinel(id INTEGER)"]
         )
+        if profile == .v156DesktopV34Extended {
+            for (database, url) in [(CodexGhostRepairSnapshotAnalysisDatabase.summaries, summariesURL), (.threadHistory, threadHistoryURL)] {
+                for table in CodexGhostRepairReferencedTables.byDatabase[database, default: []] {
+                    try execute("DROP TABLE \(table.table)", at: url)
+                    var columns = table.columns.map { "\($0) TEXT" }
+                    if table.table == "thread_items" {
+                        columns += ["started_at_ms INTEGER", "completed_at_ms INTEGER"]
+                    }
+                    try execute("CREATE TABLE \(table.table)(\(columns.joined(separator: ",")))", at: url)
+                }
+            }
+        }
         for url in [desktopURL, summariesURL, stateURL, threadHistoryURL, legacyURL] {
             XCTAssertEqual(chmod(url.path, 0o644), 0)
         }
@@ -344,9 +357,11 @@ enum BulkShippingCompositionTestFixture {
 
         if reviewedResidue {
             precondition(itemCount == 2 && absentIndices.isEmpty)
-            try execute("UPDATE automations SET status = 'PAUSED' WHERE id = 'automation-1'", at: desktopURL)
+            if profile.identifier != CodexGhostRepairSnapshotSourceProfile.v156DesktopV34Extended.identifier {
+                try execute("UPDATE automations SET status = 'PAUSED' WHERE id = 'automation-1'", at: desktopURL)
+            }
             for index in 0...2 {
-                try execute("INSERT INTO thread_turn_summaries VALUES ('principal','local','\(identifier(index))','summary-\(index)')", at: summariesURL)
+                try execute("INSERT INTO thread_turn_summaries(principal_key,host_key,thread_id,summary) VALUES ('principal','local','\(identifier(index))','summary-\(index)')", at: summariesURL)
             }
             let base = try frozenInput(itemCount: itemCount, fingerprint: source.fingerprint(),
                                        desktopURL: desktopURL, desktopSchema: desktopSchema, profile: profile)
@@ -600,13 +615,17 @@ enum BulkShippingCompositionTestFixture {
             manifestHash: hash(4),
             databases: [
                 .init(database: .desktop, schemaVersion: desktopSchema,
-                      integrityCheckPassed: true, foreignKeyViolationCount: 0),
+                      integrityCheckPassed: true, foreignKeyViolationCount: 0,
+                      schemaProfileIdentifier: profile == .v156DesktopV34Extended ? "desktop-v34-extended" : nil),
                 .init(database: .summaries, schemaVersion: 2,
-                      integrityCheckPassed: true, foreignKeyViolationCount: 0),
+                      integrityCheckPassed: true, foreignKeyViolationCount: 0,
+                      schemaProfileIdentifier: profile == .v156DesktopV34Extended ? "desktop-v34-extended" : nil),
                 .init(database: .state, schemaVersion: 0,
-                      integrityCheckPassed: true, foreignKeyViolationCount: 0),
+                      integrityCheckPassed: true, foreignKeyViolationCount: 0,
+                      schemaProfileIdentifier: profile == .v156DesktopV34Extended ? "desktop-v34-extended" : nil),
                 .init(database: .threadHistory, schemaVersion: 0,
-                      integrityCheckPassed: true, foreignKeyViolationCount: 0),
+                      integrityCheckPassed: true, foreignKeyViolationCount: 0,
+                      schemaProfileIdentifier: profile == .v156DesktopV34Extended ? "desktop-v34-extended" : nil),
             ],
             targets: targets,
             protectionEvidence: targets.map {
@@ -663,8 +682,13 @@ enum BulkShippingCompositionTestFixture {
     static func createDesktop(
         at url: URL,
         itemCount: Int,
-        schema: Int32
+        schema: Int32,
+        extended: Bool = false
     ) throws {
+        if extended {
+            try createExtendedDesktop(at: url, itemCount: itemCount)
+            return
+        }
         try execute("PRAGMA user_version = \(schema)", at: url)
         try execute(
             "CREATE TABLE local_thread_catalog(host_id TEXT, thread_id TEXT, "
@@ -736,6 +760,42 @@ enum BulkShippingCompositionTestFixture {
                         at: url
                     )
                 }
+            }
+        }
+    }
+
+    static func createExtendedDesktop(at url: URL, itemCount: Int) throws {
+        try execute("PRAGMA user_version = 34", at: url)
+        let profile = CodexGhostRepairDatabaseSchemaProfile.desktopV34Extended
+        for table in profile.desktopTables {
+            var definitions = table.columns.map { column in
+                "\(column.name) \(column.declaredType)"
+                    + (column.notNull ? " NOT NULL" : "")
+                    + (column.defaultValue.map { " DEFAULT \($0)" } ?? "")
+            }
+            let primary = table.columns.filter { $0.primaryKeyPosition > 0 }.sorted { $0.primaryKeyPosition < $1.primaryKeyPosition }
+            if !primary.isEmpty { definitions.append("PRIMARY KEY (" + primary.map(\.name).joined(separator: ",") + ")") }
+            try execute("CREATE TABLE \(table.table)(\(definitions.joined(separator: ",")))", at: url)
+            for index in table.customIndexes {
+                try execute("CREATE INDEX \(index.name) ON \(table.table)(\(index.columns.joined(separator: ",")))" + (index.partial ? " WHERE host_id = 'local'" : ""), at: url)
+            }
+        }
+        func seed(_ name: String, _ supplied: [String: String]) throws {
+            let table = profile.desktopTables.first { $0.table == name }!
+            let columns = table.columns.filter { supplied[$0.name] != nil || ($0.notNull && $0.defaultValue == nil) }
+            let values = columns.map { supplied[$0.name] ?? ($0.declaredType == "TEXT" ? "'fixture'" : "1") }
+            try execute("INSERT INTO \(name)(\(columns.map(\.name).joined(separator: ","))) VALUES(\(values.joined(separator: ",")))", at: url)
+        }
+        try seed("local_thread_catalog_metadata", ["id": "1", "catalog_revision": "1000"])
+        try seed("local_thread_catalog_sync_state", ["host_id": "'local'", "observation_sequence": "2000", "watermark_updated_at": "3000"])
+        // This unrelated catalog row and every automation setting survive cleanup.
+        try seed("local_thread_catalog", ["host_id": "'remote'", "thread_id": "'preserved-thread'", "trial_conversation_type": "'preserved-trial'"])
+        for index in 0..<itemCount {
+            let threadID = identifier(index)
+            try seed("local_thread_catalog", ["host_id": "'local'", "thread_id": "'\(threadID)'", "missing_candidate": "1", "trial_conversation_type": "'selected-trial'"])
+            if !index.isMultiple(of: 2) {
+                try seed("automation_runs", ["thread_id": "'\(threadID)'", "automation_id": "'automation-\(index)'", "status": "'PENDING_REVIEW'", "updated_at": "100"])
+                try seed("automations", ["id": "'automation-\(index)'", "auto_archive": "1", "account_id": "'account'", "user_id": "'user'", "installation_id": "'installation'"])
             }
         }
     }

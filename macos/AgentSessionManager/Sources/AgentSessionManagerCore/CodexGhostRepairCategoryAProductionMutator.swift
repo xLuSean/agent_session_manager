@@ -640,7 +640,27 @@ final class CodexGhostRepairProductionSQLite {
         database = pointer
     }
 
-    init(url: URL, readOnly: Bool) throws {
+    convenience init(url: URL, readOnly: Bool) throws {
+        try self.init(url: url, readOnly: readOnly, lockedSingleFile: false)
+    }
+
+    /// A closed single-file database may still carry the WAL header. Hold the
+    /// exclusive OS lock throughout an immutable read, validating identity and
+    /// sidecar absence before and after. Never ignore an existing WAL/journal.
+    static func withReadOnly<T>(at url: URL, read: (CodexGhostRepairProductionSQLite) throws -> T) throws -> T {
+        if CodexCompatibilitySidecars.read(at: url).allMissing {
+            return try CodexCompatibilitySingleFileRead.withLock(at: url) {
+                let database = try Self(url: url, readOnly: true, lockedSingleFile: true)
+                defer { database.close() }
+                return try read(database)
+            }
+        }
+        let database = try Self(url: url, readOnly: true)
+        defer { database.close() }
+        return try read(database)
+    }
+
+    private init(url: URL, readOnly: Bool, lockedSingleFile: Bool) throws {
         var status = stat()
         guard lstat(url.path, &status) == 0 else {
             throw CodexGhostRepairError.invalidProtectionEvidence(
@@ -676,7 +696,8 @@ final class CodexGhostRepairProductionSQLite {
         var pointer: OpaquePointer?
         let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE)
             | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_URI
-        let result = sqlite3_open_v2(url.path, &pointer, flags, nil)
+        let sqlitePath = lockedSingleFile ? url.absoluteString + "?mode=ro&immutable=1" : url.path
+        let result = sqlite3_open_v2(sqlitePath, &pointer, flags, nil)
         guard result == SQLITE_OK, let pointer else {
             if let pointer { sqlite3_close_v2(pointer) }
             throw CodexGhostRepairError.sqlite(

@@ -45,14 +45,16 @@ test("Desktop runtime discovery binds the packaged binary and rejects ambiguous 
   }
 });
 
-test("extended v34 and timed history are recognized without admitting Desktop cleanup", () => {
+test("extended v34 admission requires exact runtime and timed history", () => {
   const databases = compatibleDatabases(GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.databases);
   const result = evaluateGhostRepairContract({ runtimeVersion: "0.158.0-alpha.2.1", databases });
   assert.equal(result.schemaProfileIdentifier, "desktop-v34-extended");
   assert.equal(result.schemaCompatible, true);
-  assert.equal(result.verdict, "candidate_requires_runtime_admission");
+  assert.equal(result.verdict, "ready_current_build");
   assert.equal(result.mutationAuthority, "none");
-  assert.equal(GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.runtimeAdmissionGranted, false);
+  assert.equal(GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.runtimeAdmissionGranted, true);
+  assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.157.1", databases }).verdict, "ready_current_build");
+  assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.157.2", databases }).verdict, "candidate_requires_runtime_admission");
   assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.153.4", databases }).verdict,
     "candidate_requires_runtime_admission");
   databases.threadHistory.tables.thread_items.pop();
@@ -589,4 +591,49 @@ test("diagnostic v32 through v34 schema profiles stay synchronized with the ship
       }
     }
   }
+});
+
+
+test("v156 isolated runtime evidence stays frozen and contains no user paths", () => {
+  const raw = readFileSync(resolve(repositoryRoot, "scripts/fixtures/current-v156-read-only-evidence.json"), "utf8");
+  const fixture = JSON.parse(raw);
+  const digest = createHash("sha256").update(raw).digest("hex");
+  assert.equal(digest, "ba111c7f97d02edcc5213050cd6151a2bb70cb3a527a150b9cec6bb6994f749d");
+  const source = readFileSync(resolve(repositoryRoot, "macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairExperimentalAbsenceContract.swift"), "utf8");
+  assert.ok(source.includes(digest));
+  assert.deepEqual(fixture.runtimeProfiles.map(r => r.runtimeVersion), ["0.158.0-alpha.2.1", "0.156.1"]);
+  assert.equal(fixture.runtimeProfiles[0].generatedProtocol.schemaBundleSha256, fixture.runtimeProfiles[1].generatedProtocol.schemaBundleSha256);
+  for (const runtime of fixture.runtimeProfiles) {
+    assert.ok(source.includes(runtime.executableSha256));
+    assert.ok(source.includes(runtime.generatedProtocol.schemaBundleSha256));
+    assert.equal(runtime.missingThreadRead.rpcCode, -32600);
+    assert.equal(runtime.missingThreadRead.messageTemplate, "thread not loaded: {thread_id}");
+    assert.equal(runtime.requestBoundary.existingThreadIDsRead, 0);
+    assert.equal(runtime.requestBoundary.lifecycleMutationRequests, 0);
+  }
+  assert.equal(fixture.sourceLayout.desktopSchemaProfile, "desktop-v34-extended");
+  assert.equal(fixture.safetyContract.mutationAuthorityGranted, false);
+  assert.doesNotMatch(raw, /\/Users\/|\/Applications\/|\/private\/|\/var\//);
+});
+
+test("v157 isolated runtime evidence stays frozen and contains no user paths", () => {
+  const raw = readFileSync(resolve(repositoryRoot, "scripts/fixtures/current-v157-read-only-evidence.json"), "utf8");
+  const fixture = JSON.parse(raw);
+  const digest = createHash("sha256").update(raw).digest("hex");
+  assert.equal(digest, "c8527c2bf8736d076a7ba6c3bfc878667e2ca80c82c2f90fe91c2d8484f6b640");
+  const source = readFileSync(resolve(repositoryRoot, "macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairExperimentalAbsenceContract.swift"), "utf8");
+  assert.ok(source.includes(digest));
+  assert.deepEqual(fixture.runtimeProfiles.map(r => r.runtimeVersion), ["0.158.0-alpha.2.1", "0.157.1"]);
+  assert.equal(fixture.runtimeProfiles[0].generatedProtocol.schemaBundleSha256, fixture.runtimeProfiles[1].generatedProtocol.schemaBundleSha256);
+  for (const runtime of fixture.runtimeProfiles) {
+    assert.ok(source.includes(runtime.executableSha256));
+    assert.ok(source.includes(runtime.generatedProtocol.schemaBundleSha256));
+    assert.equal(runtime.missingThreadRead.rpcCode, -32600);
+    assert.equal(runtime.missingThreadRead.messageTemplate, "thread not loaded: {thread_id}");
+    assert.equal(runtime.requestBoundary.existingThreadIDsRead, 0);
+    assert.equal(runtime.requestBoundary.lifecycleMutationRequests, 0);
+  }
+  assert.equal(fixture.sourceLayout.desktopSchemaProfile, "desktop-v34-extended");
+  assert.equal(fixture.safetyContract.mutationAuthorityGranted, false);
+  assert.doesNotMatch(raw, /\/Users\/|\/Applications\/|\/private\/|\/var\//);
 });

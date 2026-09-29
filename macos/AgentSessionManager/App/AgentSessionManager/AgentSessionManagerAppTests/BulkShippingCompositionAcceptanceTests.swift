@@ -70,6 +70,71 @@ final class BulkShippingCompositionAcceptanceTests: XCTestCase {
         )
     }
 
+    func testExtendedV156Exact148CanonicalDeleteHandoffBindsPreparedPlanAndVerifiesTerminalCleanup()
+        async throws
+    {
+        let reportID = UUID(
+            uuidString: "94000000-0000-4000-8000-000000000148"
+        )!
+        let harness = try await BulkShippingAcceptanceHarness.make(
+            canonicalDeleteReportID: reportID, extended: true
+        )
+        let expectedIDs = harness.fixture.inventory.eligibleThreadIDs
+
+        // The native Delete RPC and readback are deliberately not invoked in
+        // this composition test. Their canonical report and durable tombstones
+        // are deterministic inputs; the App handoff, prepared-plan binding,
+        // mixed transaction, terminal journal, and linkage readback are real.
+        guard case let .status(context, .prepared(handoff, binding)) =
+                harness.model.nativeDeleteDesktopCleanupState else {
+            return XCTFail(
+                "Expected the App to bind its exact prepared cleanup operation."
+            )
+        }
+        XCTAssertEqual(context.canonicalDeleteReportID, reportID)
+        XCTAssertEqual(context.expectedNativeSessionIDs, expectedIDs)
+        XCTAssertEqual(context.nativeDeleteItemCount, 148)
+        XCTAssertEqual(handoff.nativeSessionIDs.count, 148)
+        XCTAssertEqual(handoff.nativeSessionIDs, expectedIDs)
+        XCTAssertEqual(binding.bulkIdentity, harness.identity)
+        XCTAssertEqual(binding.items.count, 148)
+        XCTAssertEqual(binding.items.map(\.nativeSessionID), expectedIDs)
+
+        let execution = Task { @MainActor in
+            await harness.model.executeGhostRepairBulkOneShot()
+        }
+        let pauseResult = await XCTWaiter.fulfillment(
+            of: [harness.terminalReadbackReached],
+            timeout: 10
+        )
+        guard pauseResult == .completed else {
+            execution.cancel()
+            return XCTFail("Real transaction did not reach terminal readback.")
+        }
+        await harness.pause.release()
+        await execution.value
+
+        await harness.model.readNativeDeleteDesktopCleanupStatus()
+        guard case let .status(verifiedContext, .verified(
+            verifiedHandoff,
+            verifiedBinding,
+            completedAtMilliseconds
+        )) = harness.model.nativeDeleteDesktopCleanupState else {
+            return XCTFail("Expected verified exact terminal cleanup status.")
+        }
+        XCTAssertEqual(verifiedContext, context)
+        XCTAssertEqual(verifiedHandoff, handoff)
+        XCTAssertEqual(verifiedBinding, binding)
+        XCTAssertGreaterThan(completedAtMilliseconds, 0)
+        XCTAssertEqual(
+            try BulkShippingCompositionTestFixture.scalar(
+                "SELECT count(*) FROM local_thread_catalog WHERE host_id = 'local'",
+                at: harness.fixture.desktopURL
+            ),
+            0
+        )
+    }
+
     func testExact148ShippingCompositionPreservesIdentityAndColdReadsTerminalReport()
         async throws
     {
@@ -695,13 +760,15 @@ private struct BulkShippingAcceptanceHarness {
         runnerFault: CodexGhostRepairBulkLiveOneShotFault = .none,
         journalTransform: @escaping JournalTransform = { $0 },
         canonicalDeleteReportID: UUID? = nil,
-        useInitialWitnessDiscovery: Bool = false
+        useInitialWitnessDiscovery: Bool = false,
+        extended: Bool = false
     ) async throws -> Self {
+        let runtimeVersion = extended ? "0.156.1" : "0.153.4"
         let fixture = try BulkShippingCompositionTestFixture.make(
             itemCount: 148,
             desktopSchema: 34,
-            profile: .v1534DesktopV34,
-            runtimeVersion: "0.153.4"
+            profile: extended ? .v156DesktopV34Extended : .v1534DesktopV34,
+            runtimeVersion: runtimeVersion
         )
         let nowMilliseconds: @Sendable () -> Int64 = {
             Int64((Date().timeIntervalSince1970 * 1_000).rounded())
@@ -733,7 +800,7 @@ private struct BulkShippingAcceptanceHarness {
             testOwnedSourceAllowedParentURL: fixture.parent,
             testOwnedManagerRootURL: managerRoot,
             testOwnedManagerAllowedParentURL: fixture.parent,
-            profile: .v1534DesktopV34,
+            profile: fixture.profile,
             nowMilliseconds: nowMilliseconds
         )
         let planPreparer = CodexGhostRepairBulkPackagedPlanPreparer(
@@ -746,7 +813,7 @@ private struct BulkShippingAcceptanceHarness {
                     testOwnedCodexHomeURL: fixture.codexHome,
                     testOwnedAllowedParentURL: fixture.parent
                 ).resolveForTestOwnedAdoption()
-                return (resolution, .v1534DesktopV34)
+                return (resolution, fixture.profile)
             },
             maintenanceObserverProvider: { profile in
                 CodexGhostRepairBulkProductionMaintenanceObserver(
@@ -766,7 +833,7 @@ private struct BulkShippingAcceptanceHarness {
                 )
             },
             targetRevalidatorProvider: { profile in
-                XCTAssertEqual(profile, .v1534DesktopV34)
+                XCTAssertEqual(profile, fixture.profile)
                 return try CodexGhostRepairBulkLiveTargetRevalidator(
                     repairResolution: repairResolution,
                     gateSource: AlwaysClearBulkRepairGate(),
@@ -782,7 +849,7 @@ private struct BulkShippingAcceptanceHarness {
         let realMutator = CodexGhostRepairBulkLiveMixedMutator(
             testOwnedCodexHomeURL: fixture.codexHome,
             testOwnedAllowedParentURL: fixture.parent,
-            profile: .v1534DesktopV34,
+            profile: fixture.profile,
             gateSource: AlwaysClearBulkRepairGate(),
             backupReader: TestOwnedBackupReader(environment: backupEnvironment)
         )
@@ -804,7 +871,7 @@ private struct BulkShippingAcceptanceHarness {
                 databaseURLProvider: { fixture.managerStateURL },
                 operationExclusion: operationExclusion,
                 readbackProvider: { profile in
-                    XCTAssertEqual(profile, .v1534DesktopV34)
+                    XCTAssertEqual(profile, fixture.profile)
                     return realMutator
                 },
                 nowMilliseconds: nowMilliseconds,
@@ -839,8 +906,7 @@ private struct BulkShippingAcceptanceHarness {
             planPreparer: planPreparer,
             runnerFactory: { profileIdentifier in
                 guard profileIdentifier
-                        == CodexGhostRepairSnapshotSourceProfile
-                            .v1534DesktopV34.identifier else {
+                        == fixture.profile.identifier else {
                     throw CodexGhostRepairError.authorityDrift
                 }
                 return pausingRunner
@@ -862,7 +928,7 @@ private struct BulkShippingAcceptanceHarness {
             diagnosticLogStore: DiagnosticLogStore.productionInMemory(),
             ghostRepairReadOnlySafetySource:
                 DeterministicSnapshotWitnessSafetySource(
-                    runtimeVersion: "0.153.4"
+                    runtimeVersion: runtimeVersion
                 ),
             ghostRepairSnapshotActionCoordinator:
                 useInitialWitnessDiscovery

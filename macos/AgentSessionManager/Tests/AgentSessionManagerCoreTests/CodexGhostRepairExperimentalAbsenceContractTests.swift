@@ -141,7 +141,7 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry
             .packagedCurrent()
 
-        XCTAssertEqual(registry.admittedProfileCount, 6)
+        XCTAssertEqual(registry.admittedProfileCount, 9)
         guard case let .matched(evidence) = registry.evaluate(
             makeV151Observation(
                 runtimeVersion: "0.152.1",
@@ -187,7 +187,7 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry
             .packagedCurrent()
 
-        XCTAssertEqual(registry.admittedProfileCount, 6)
+        XCTAssertEqual(registry.admittedProfileCount, 9)
         for (runtime, profile) in [
             ("0.153.1", "desktop-bundled-0.153.1"),
             ("0.153.2", "provider-0.153.2"),
@@ -237,11 +237,31 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         )
     }
 
+    func testV156AbsenceRequiresExactRuntimeSourceSchemaAndFreshPresentControl() {
+        let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry.packagedCurrent()
+        for runtime in ["0.156.1", "0.157.1", "0.158.0-alpha.2.1"] {
+            let observation = makeV151Observation(runtimeVersion: runtime,
+                sourceLayoutIdentifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v156SourceLayoutIdentifier,
+                desktopSchemaVersion: 34, schemaProfileIdentifier: "desktop-v34-extended")
+            guard case let .matched(evidence) = registry.evaluate(observation, freshPresentControlVerified: true) else {
+                return XCTFail("Exact extended pair should match")
+            }
+            XCTAssertEqual(evidence.databaseSchemaProfileIdentifier, "desktop-v34-extended")
+            XCTAssertFalse(evidence.repairMutationAuthority)
+            XCTAssertEqual(registry.evaluate(observation, freshPresentControlVerified: false), .unavailable(.freshPresentControlUnavailable))
+            XCTAssertEqual(registry.evaluate(makeV151Observation(runtimeVersion: runtime,
+                sourceLayoutIdentifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v156SourceLayoutIdentifier,
+                desktopSchemaVersion: 34), freshPresentControlVerified: true), .unavailable(.snapshotSchemaDrift))
+        }
+        XCTAssertFalse(CodexGhostRepairPackagedReadOnlyProfileCatalog.supportsObservationRuntime("0.156.2"))
+        XCTAssertFalse(CodexGhostRepairPackagedReadOnlyProfileCatalog.supportsObservationRuntime("0.157.2"))
+    }
+
     func testCurrentRegistryAdmitsOnlyProviderV1534ForExactDesktopV34Source() {
         let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry
             .packagedCurrent()
 
-        XCTAssertEqual(registry.admittedProfileCount, 6)
+        XCTAssertEqual(registry.admittedProfileCount, 9)
         guard case let .matched(evidence) = registry.evaluate(
             makeV151Observation(
                 runtimeVersion: "0.153.4",
@@ -328,7 +348,7 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry
             .packagedCurrent()
 
-        XCTAssertEqual(registry.admittedProfileCount, 6)
+        XCTAssertEqual(registry.admittedProfileCount, 9)
         guard case let .matched(evidence) = registry.evaluate(
             makeV151Observation(
                 runtimeVersion: "0.153.4",
@@ -685,7 +705,8 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         sourceLayoutIdentifier: String =
             CodexGhostRepairPackagedReadOnlyProfileCatalog
                 .v151SourceLayoutIdentifier,
-        desktopSchemaVersion: Int32 = 33
+        desktopSchemaVersion: Int32 = 33,
+        schemaProfileIdentifier: String? = nil
     ) -> CodexGhostRepairExperimentalAbsenceObservation {
         .init(
             provider: .codex,
@@ -704,7 +725,8 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
                     database: $0.database,
                     schemaVersion: $0.schemaVersion,
                     integrityCheckPassed: true,
-                    foreignKeyViolationCount: 0
+                    foreignKeyViolationCount: 0,
+                    schemaProfileIdentifier: schemaProfileIdentifier
                 )
             }
         )

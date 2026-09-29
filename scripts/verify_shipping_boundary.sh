@@ -36,6 +36,7 @@ SNAPSHOT_REQUEST_BOUND_PROFILE="$REPOSITORY_ROOT/macos/AgentSessionManager/Sourc
 SNAPSHOT_READBACK_COORDINATOR="$REPOSITORY_ROOT/macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairSnapshotReadbackCoordinator.swift"
 SNAPSHOT_ANALYSIS_IDENTITY="$REPOSITORY_ROOT/macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairSnapshotAnalysisIdentity.swift"
 SNAPSHOT_ANALYSIS_READER="$REPOSITORY_ROOT/macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairSnapshotAnalysisReader.swift"
+SNAPSHOT_ANALYSIS_CAPTURE="$REPOSITORY_ROOT/macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairSnapshotAnalysisCapture.swift"
 INITIAL_WITNESS_DISCOVERY="$REPOSITORY_ROOT/macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairInitialWitnessDiscovery.swift"
 SNAPSHOT_DRY_RUN_PLANNER="$REPOSITORY_ROOT/macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairSnapshotDryRunPlanner.swift"
 SNAPSHOT_DRY_RUN_COORDINATOR="$REPOSITORY_ROOT/macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairSnapshotDryRunAnalysisCoordinator.swift"
@@ -122,8 +123,9 @@ if [[ ! -f "$BULK_PRODUCTION_MAINTENANCE_OBSERVER" ]] \
     || ! grep -q 'ghostRepairExecutionGate()' "$BULK_PRODUCTION_MAINTENANCE_OBSERVER" \
     || ! grep -q 'gate.stateOpenHandleCount == 0' "$BULK_PRODUCTION_MAINTENANCE_OBSERVER" \
     || ! grep -q 'gate.threadHistoryOpenHandleCount == 0' "$BULK_PRODUCTION_MAINTENANCE_OBSERVER" \
-    || ! grep -q 'CodexGhostRepairProductionSQLite(' "$BULK_PRODUCTION_MAINTENANCE_OBSERVER" \
-    || ! grep -q 'readOnly: true' "$BULK_PRODUCTION_MAINTENANCE_OBSERVER"; then
+    || grep -q 'CodexGhostRepairProductionSQLite(' "$BULK_PRODUCTION_MAINTENANCE_OBSERVER" \
+    || ! grep -q 'CodexGhostRepairBulkCanonicalQueryOnlyReader.readExactCleanupScope(' "$BULK_PRODUCTION_MAINTENANCE_OBSERVER" \
+    || ! grep -q 'workspaceFactory: .production()' "$BULK_PRODUCTION_MAINTENANCE_OBSERVER"; then
     print -u2 "The packaged bulk maintenance observer is public, path-extensible, writable, or missing its gate-first fixed read-only evidence contract."
     exit 1
 fi
@@ -831,10 +833,29 @@ if grep -n 'CodexGhostRepairSnapshotAnalysisIdentityCoordinatorFactory' "$APP_SO
     exit 1
 fi
 
+# Live capture writes only a private analysis destination; canonical source
+# writes remain prohibited by the separate source check above.
+if [[ ! -f "$SNAPSHOT_ANALYSIS_CAPTURE" ]] \
+    || grep -nE '^public |sqlite3_|O_RDWR|O_TRUNC|O_APPEND|homeDirectoryForCurrentUser|NSHomeDirectory|sourceURL|removeItem|unlink\(|rename\(|CodexAppServer' "$SNAPSHOT_ANALYSIS_CAPTURE" \
+    || grep -R -n 'CodexGhostRepairSnapshotAnalysisCapture' "$APP_SOURCE" \
+    || [[ $(grep -c 'O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW' "$SNAPSHOT_ANALYSIS_CAPTURE") -ne 1 ]] \
+    || ! grep -q 'in workspace: CodexGhostRepairSnapshotAnalysisWorkspace' "$SNAPSHOT_ANALYSIS_CAPTURE" \
+    || ! grep -q 'source.captureAnalysisMembers' "$SNAPSHOT_ANALYSIS_CAPTURE" \
+    || ! grep -q 'fclonefileat(descriptor, directory, file.rawValue, 0)' "$SNAPSHOT_ANALYSIS_CAPTURE" \
+    || ! grep -q 'directoryStatus.st_uid == geteuid()' "$SNAPSHOT_ANALYSIS_CAPTURE" \
+    || ! grep -q 'directoryStatus.st_mode & 0o7777 == 0o700' "$SNAPSHOT_ANALYSIS_CAPTURE" \
+    || ! grep -q 'copied.st_uid == geteuid(), copied.st_nlink == 1' "$SNAPSHOT_ANALYSIS_CAPTURE" \
+    || ! grep -q 'fchmod(copy, S_IRUSR | S_IWUSR)' "$SNAPSHOT_ANALYSIS_CAPTURE" \
+    || ! grep -q 'stableCaptureIdentity(first, second)' "$SNAPSHOT_CANONICAL_SOURCE" \
+    || ! grep -q 'if file.isVolatileSharedMemory { return nil }' "$SNAPSHOT_CANONICAL_SOURCE"; then
+    print -u2 "Live analysis capture must use read-only canonical descriptors and an exclusive owner-private destination."
+    exit 1
+fi
+
 if [[ ! -f "$SNAPSHOT_ANALYSIS_READER" ]] \
     || head -n 8 "$SNAPSHOT_ANALYSIS_READER" | grep -q 'AGENT_SESSION_MANAGER_RESEARCH' \
     || grep -nE 'SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE|O_RDWR|O_TRUNC|O_APPEND|sqlite3_backup|sqlite3_deserialize|sqlite3_serialize|createDirectory|copyItem|\.moveItem|mkdir\(|unlink\(|rename\(|INSERT INTO|UPDATE |DELETE FROM|ATTACH |DETACH ' "$SNAPSHOT_ANALYSIS_READER" \
-    || [[ $(grep -c 'O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW' "$SNAPSHOT_ANALYSIS_READER") -ne 2 ]] \
+    || [[ $(grep -c 'O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW' "$SNAPSHOT_ANALYSIS_READER") -ne 1 ]] \
     || [[ $(grep -c 'FileManager.default.removeItem(at: rootURL)' "$SNAPSHOT_ANALYSIS_READER") -ne 2 ]] \
     || [[ $(grep -c 'chmod(rootURL.path, 0o700)' "$SNAPSHOT_ANALYSIS_READER") -ne 1 ]] \
     || [[ $(grep -c 'fchmod(destinationDescriptor, S_IRUSR | S_IWUSR)' "$SNAPSHOT_ANALYSIS_READER") -ne 1 ]] \

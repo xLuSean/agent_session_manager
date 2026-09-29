@@ -4,6 +4,7 @@ import Foundation
 enum CodexGhostRepairBulkLiveMixedMutationFault: Sendable {
     case none
     case explicitBusyBeforeTransaction
+    case beforeCommit
     case afterCommitBeforeReadback
     case afterSummaryRemoval
 }
@@ -416,6 +417,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
                         "M4f-17 transaction readback was not exact."
                     )
                 }
+                if fault == .beforeCommit { throw CodexGhostRepairError.injectedInterruption }
                 try desktop.execute("COMMIT")
             } catch {
                 try? desktop.execute("ROLLBACK")
@@ -604,21 +606,41 @@ actor CodexGhostRepairBulkLiveMixedMutator {
         desktopDatabase: CodexGhostRepairProductionSQLite? = nil,
         summaryTransaction: CodexGhostRepairProductionSQLite? = nil
     ) throws -> CodexGhostRepairBulkLiveMixedObservedState {
-        let ownsDesktop = desktopDatabase == nil
-        let desktop = try desktopDatabase ?? CodexGhostRepairProductionSQLite(
-            url: resolution.databaseURL(for: .desktop), readOnly: true
-        )
-        defer { if ownsDesktop { desktop.close() } }
-        let summaries = try CodexGhostRepairProductionSQLite(
-            url: resolution.databaseURL(for: .summaries), readOnly: true
-        )
-        let state = try CodexGhostRepairProductionSQLite(
-            url: resolution.databaseURL(for: .state), readOnly: true
-        )
-        let history = try CodexGhostRepairProductionSQLite(
-            url: resolution.databaseURL(for: .threadHistory), readOnly: true
-        )
-        defer { summaries.close(); state.close(); history.close() }
+        func readDesktop(_ read: (CodexGhostRepairProductionSQLite) throws -> CodexGhostRepairBulkLiveMixedObservedState) throws -> CodexGhostRepairBulkLiveMixedObservedState {
+            if let desktopDatabase { return try read(desktopDatabase) }
+            return try CodexGhostRepairProductionSQLite.withReadOnly(at: resolution.databaseURL(for: .desktop), read: read)
+        }
+        func readSummaries(_ read: (CodexGhostRepairProductionSQLite) throws -> CodexGhostRepairBulkLiveMixedObservedState) throws -> CodexGhostRepairBulkLiveMixedObservedState {
+            if summaryTransaction != nil {
+                // The attached write transaction already owns this database.
+                // Its rows are read through that transaction below; this handle
+                // only verifies the committed schema and integrity.
+                let summaries = try CodexGhostRepairProductionSQLite(url: resolution.databaseURL(for: .summaries), readOnly: true)
+                defer { summaries.close() }
+                return try read(summaries)
+            }
+            return try CodexGhostRepairProductionSQLite.withReadOnly(at: resolution.databaseURL(for: .summaries), read: read)
+        }
+        return try readDesktop { desktop in
+            try readSummaries { summaries in
+                try CodexGhostRepairProductionSQLite.withReadOnly(at: resolution.databaseURL(for: .state)) { state in
+                    try CodexGhostRepairProductionSQLite.withReadOnly(at: resolution.databaseURL(for: .threadHistory)) { history in
+                        try inspectHandles(selectedItems: selectedItems, desktop: desktop, summaries: summaries,
+                                           state: state, history: history, summaryTransaction: summaryTransaction)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func inspectHandles(
+        selectedItems: [CodexGhostRepairBulkBackupBoundOperationItem],
+        desktop: CodexGhostRepairProductionSQLite,
+        summaries: CodexGhostRepairProductionSQLite,
+        state: CodexGhostRepairProductionSQLite,
+        history: CodexGhostRepairProductionSQLite,
+        summaryTransaction: CodexGhostRepairProductionSQLite?
+    ) throws -> CodexGhostRepairBulkLiveMixedObservedState {
         let handles: [
             (CodexGhostRepairSnapshotAnalysisDatabase,
              CodexGhostRepairProductionSQLite)
@@ -626,14 +648,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
             (.desktop, desktop), (.summaries, summaries),
             (.state, state), (.threadHistory, history),
         ]
-        let databases = try handles.map { database, handle in
-            CodexGhostRepairSnapshotAnalysisDatabaseEvidence(
-                database: database,
-                schemaVersion: try handle.schemaVersion(),
-                integrityCheckPassed: try handle.integrityPassed(),
-                foreignKeyViolationCount: try handle.foreignKeyViolationCount()
-            )
-        }
+        let databases = try CodexGhostRepairDatabaseSchemaProfile.liveEvidence(handles)
         let items = try selectedItems.map {
             try observedItem(
                 frozen: $0, desktop: desktop, summaries: summaryTransaction ?? summaries,

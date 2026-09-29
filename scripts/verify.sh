@@ -4,6 +4,7 @@ set -euo pipefail
 
 # Installed-runtime acceptance is a separate explicit operation, never part of verification.
 unset ASM_COMPATIBILITY_ACCEPTANCE ASM_COMPATIBILITY_ACCEPTANCE_EXECUTABLE ASM_COMPATIBILITY_LOCAL_INSPECTION
+unset ASM_INSTALLED_CLEANUP_READ ASM_INSTALLED_CLEANUP_SCAN ASM_INSTALLED_CLEANUP_THREAD_ID
 
 SCRIPT_DIR=${0:A:h}
 REPOSITORY_ROOT=${SCRIPT_DIR:h}
@@ -84,7 +85,7 @@ if ! (
         swift test \
             --disable-sandbox \
             --scratch-path "$SHIPPING_SWIFT_BUILD_ROOT" \
-            --filter 'CodexGhostRepair(CategoryAExecutionContract|CategoryAProductionMutator|CategoryAProductionReviewMaterialCollector|CategoryARepairExecutionCoordinator|CategoryARepairReviewCoordinator|DestinationCanary|InitialWitnessDiscovery|ProductionRepairBundle|SnapshotCanonicalSource|SnapshotPreparedDestination|SnapshotAcquisitionJournal|SnapshotPublishedInventory|SnapshotQuarantinePublisher|SnapshotOperationalGateSource|SnapshotActionCoordinator|SnapshotReadback|SnapshotAnalysisIdentity|SnapshotAnalysisReader)'
+            --filter 'CodexCleanupClosedWALTests|CodexGhostRepair(CategoryAExecutionContract|CategoryAProductionMutator|CategoryAProductionReviewMaterialCollector|CategoryARepairExecutionCoordinator|CategoryARepairReviewCoordinator|DestinationCanary|InitialWitnessDiscovery|ProductionRepairBundle|SnapshotCanonicalSource|SnapshotPreparedDestination|SnapshotAcquisitionJournal|SnapshotPublishedInventory|SnapshotQuarantinePublisher|SnapshotOperationalGateSource|SnapshotActionCoordinator|SnapshotReadback|SnapshotAnalysisIdentity|SnapshotAnalysisReader)'
 ) >"$SHIPPING_SWIFT_LOG" 2>&1; then
     print_failure_log "shipping swift test without research code" "$SHIPPING_SWIFT_LOG"
     exit 1

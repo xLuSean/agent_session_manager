@@ -159,6 +159,7 @@ enum CodexCompatibilityDatabase {
         let inspection = try kind.map { try CodexCompatibilityDatabaseContract.inspect(database: $0, version: version, rows: rows) }
         var check = kind.map { CodexCompatibilityDatabaseCheck(database: $0, issue: inspection?.issue) }
         check?.inspectionOnly = inspection?.inspectionOnly
+        check?.schemaProfileIdentifier = inspection?.profile
         let profileID = inspection?.profile
         return .init(fingerprint: fingerprint, userVersion: version, desktopProfile: profileID, check: check)
     }

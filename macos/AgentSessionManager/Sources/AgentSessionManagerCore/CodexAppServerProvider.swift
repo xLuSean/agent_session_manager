@@ -486,7 +486,7 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
         return snapshot
     }
 
-    func compatibilityExecutableURL() throws -> URL { try resolveExecutableURL() }
+    public func compatibilityExecutableURL() throws -> URL { try resolveExecutableURL() }
 
     func lifecycleReadback() async throws -> CodexInventorySnapshot {
         try Task.checkCancellation()

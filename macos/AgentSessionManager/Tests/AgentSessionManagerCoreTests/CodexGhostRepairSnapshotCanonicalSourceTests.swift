@@ -4,6 +4,83 @@ import Foundation
 import XCTest
 
 final class CodexGhostRepairSnapshotCanonicalSourceTests: XCTestCase {
+    func testAnalysisCaptureClonesOrStreamsDurableMembersAndRebuildsSharedMemory() throws {
+        for streaming in [false, true] {
+            let fixture = try makeFixture(label: #function, includeSidecars: true)
+            defer { try? FileManager.default.trashItem(at: fixture.parent, resultingItemURL: nil) }
+            let workspace = try CodexGhostRepairSnapshotAnalysisWorkspaceFactory(
+                testOwnedParentURL: fixture.parent).create()
+            let before = try fixture.source.fingerprint()
+            let captured = try CodexGhostRepairSnapshotAnalysisCapture.capture(source: fixture.source,
+                in: workspace, forceStreamingForTesting: streaming)
+            try captured.validateHash()
+            for (file, evidence) in zip(CodexGhostRepairSnapshotCanonicalFile.allCases, captured.files) {
+                if file.isVolatileSharedMemory {
+                    XCTAssertFalse(evidence.exists)
+                    XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.rootURL.appendingPathComponent(file.rawValue).path))
+                } else {
+                    XCTAssertEqual(evidence, before.files.first { $0.fileName == file.rawValue })
+                    XCTAssertEqual(try Data(contentsOf: workspace.rootURL.appendingPathComponent(file.rawValue)),
+                        try Data(contentsOf: file.sourceURL(codexHomeURL: fixture.codexHome, sqliteRootURL: fixture.sqliteRoot)))
+                }
+            }
+            XCTAssertEqual(try fixture.source.fingerprint(), before)
+        }
+    }
+
+    func testAnalysisCaptureRejectsDurableChangesDuringCapture() throws {
+        for change in ["database", "new-wal", "restored-mtime"] {
+            let fixture = try makeFixture(label: #function)
+            defer { try? FileManager.default.trashItem(at: fixture.parent, resultingItemURL: nil) }
+            let workspace = try CodexGhostRepairSnapshotAnalysisWorkspaceFactory(
+                testOwnedParentURL: fixture.parent).create()
+            let file: CodexGhostRepairSnapshotCanonicalFile = change == "new-wal" ? .desktopWAL : .desktop
+            let url = file.sourceURL(codexHomeURL: fixture.codexHome, sqliteRootURL: fixture.sqliteRoot)
+            let oldDate = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            XCTAssertThrowsError(try CodexGhostRepairSnapshotAnalysisCapture.capture(source: fixture.source,in: workspace, afterCopiedMemberForTesting: { index in
+                guard index == 0 else { return }
+                try Data("changed-during-capture".utf8).write(to: url)
+                if change == "restored-mtime", let oldDate {
+                    try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: url.path)
+                }
+            })) { error in
+                guard case CodexGhostRepairError.targetDrift = error else {
+                    return XCTFail("Expected capture drift, not raw error output")
+                }
+            }
+        }
+    }
+
+    func testAnalysisCaptureRemainsValidWhenSourceChangesAfterCapture() throws {
+        let fixture = try makeFixture(label: #function)
+        defer { try? FileManager.default.trashItem(at: fixture.parent, resultingItemURL: nil) }
+        let workspace = try CodexGhostRepairSnapshotAnalysisWorkspaceFactory(
+            testOwnedParentURL: fixture.parent).create()
+        let before = try fixture.source.fingerprint()
+        let captured = try CodexGhostRepairSnapshotAnalysisCapture.capture(source: fixture.source,in: workspace, afterCaptureForTesting: {
+            try Data("new-live-history".utf8).write(to: fixture.codexHome.appendingPathComponent("thread_history_1.sqlite"))
+        })
+        XCTAssertEqual(captured, before)
+        XCTAssertNotEqual(try fixture.source.fingerprint(), captured)
+        XCTAssertEqual(try Data(contentsOf: workspace.rootURL.appendingPathComponent("thread_history_1.sqlite")),
+                       Data("M1b-2 thread_history_1.sqlite\n".utf8))
+    }
+
+    func testAnalysisCaptureRejectsUnsafeSources() throws {
+        let fixtures = [
+            try makeFixture(label: #function, includeMarker: false),
+            try makeFixture(label: #function, omittedRequired: .state),
+            try makeFixture(label: #function, symlinkedRequired: .desktop),
+            try makeFixture(label: #function, groupWritableRequired: .desktop)
+        ]
+        for fixture in fixtures {
+            defer { try? FileManager.default.trashItem(at: fixture.parent, resultingItemURL: nil) }
+            let workspace = try CodexGhostRepairSnapshotAnalysisWorkspaceFactory(
+                testOwnedParentURL: fixture.parent).create()
+            XCTAssertThrowsError(try CodexGhostRepairSnapshotAnalysisCapture.capture(source: fixture.source,in: workspace))
+        }
+    }
+
     func testProductionConstructionIsPathFreeZeroIOAndReadOnly() {
         let source = CodexGhostRepairSnapshotCanonicalSource.production()
 

@@ -309,15 +309,7 @@ actor CodexGhostRepairBulkProductionMutator:
             (.desktop, desktop), (.summaries, summaries),
             (.state, state), (.threadHistory, history),
         ]
-        let databaseEvidence = try databases.map { database, handle in
-            CodexGhostRepairSnapshotAnalysisDatabaseEvidence(
-                database: database,
-                schemaVersion: try handle.schemaVersion(),
-                integrityCheckPassed: try handle.integrityPassed(),
-                foreignKeyViolationCount:
-                    try handle.foreignKeyViolationCount()
-            )
-        }
+        let databaseEvidence = try CodexGhostRepairDatabaseSchemaProfile.liveEvidence(databases)
         let items = try draft.plan.selectedItems.map {
             try observedItem(
                 frozen: $0,

@@ -36,6 +36,9 @@ public struct CodexGhostRepairSnapshotAnalysisDatabaseEvidence:
     public let schemaVersion: Int32
     public let integrityCheckPassed: Bool
     public let foreignKeyViolationCount: Int
+    /// Nil preserves historical evidence. Extended v34 requires this exact
+    /// identity on every database; user_version alone is never sufficient.
+    public var schemaProfileIdentifier: String? = nil
 
     public var queryOnly: Bool { true }
     public var fixedStatementsOnly: Bool { true }
@@ -228,6 +231,7 @@ public enum CodexGhostRepairSnapshotAnalysisFailureReason:
     case publishedAccessPostflightUnavailable =
         "published-access-postflight-unavailable"
     case publishedAccessDrift = "published-access-drift"
+    case canonicalCaptureDrift = "canonical-capture-drift"
     case unexpected = "unexpected-reader-failure"
 
     public var pathRedacted: Bool { true }
@@ -263,6 +267,7 @@ enum CodexGhostRepairSnapshotAnalysisFailurePoint:
     case workspaceCleanup
     case publishedAccessPostflight
     case publishedAccessDrift
+    case canonicalCaptureDrift
     case unexpected
 
     var failureReason: CodexGhostRepairSnapshotAnalysisFailureReason {
@@ -293,6 +298,7 @@ enum CodexGhostRepairSnapshotAnalysisFailurePoint:
         case .publishedAccessPostflight:
             .publishedAccessPostflightUnavailable
         case .publishedAccessDrift: .publishedAccessDrift
+        case .canonicalCaptureDrift: .canonicalCaptureDrift
         case .unexpected: .unexpected
         }
     }
@@ -858,6 +864,10 @@ enum CodexGhostRepairCanonicalQueryOnlyReader {
 }
 
 enum CodexGhostRepairBulkCanonicalQueryOnlyReader {
+    static func failureReason(for error: Error) -> CodexGhostRepairSnapshotAnalysisFailureReason {
+        CodexGhostRepairSnapshotQueryOnlyBundle.failureReason(for: error)
+    }
+
     static func readExactCleanupScope(
         source: CodexGhostRepairSnapshotCanonicalSource,
         targetThreadIDs: [String],
@@ -934,6 +944,12 @@ enum CodexGhostRepairSnapshotPrepublicationSchemaVerifier {
     }
 }
 
+/// Safe diagnostic boundary shared with the scan coordinator. Underlying SQL,
+/// paths and row values never leave the reader as error metadata.
+struct CodexGhostRepairSnapshotAnalysisReadError: Error, Sendable {
+    let point: CodexGhostRepairSnapshotAnalysisFailurePoint
+}
+
 private enum CodexGhostRepairSnapshotQueryOnlyBundle {
     struct Result {
         let databases: [CodexGhostRepairSnapshotAnalysisDatabaseEvidence]
@@ -941,9 +957,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         let authority: CodexGhostRepairSnapshotAnalysisAuthorityEvidence
     }
 
-    private struct DiagnosticFailure: Error {
-        let point: CodexGhostRepairSnapshotAnalysisFailurePoint
-    }
+    private typealias DiagnosticFailure = CodexGhostRepairSnapshotAnalysisReadError
 
     static func failureReason(
         for error: Error
@@ -1295,23 +1309,12 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         source: CodexGhostRepairSnapshotCanonicalSource,
         workspaceFactory: CodexGhostRepairSnapshotAnalysisWorkspaceFactory
     ) throws -> CodexGhostRepairInitialWitnessCatalogReadback {
-        let sourceBefore = try diagnosed(.publishedSourcePreflight) {
-            let value = try source.fingerprint()
-            try value.validateHash()
-            return value
-        }
         let workspace = try diagnosed(.workspaceCreation) {
             try workspaceFactory.create()
         }
         var cleanupAttempted = false
         do {
-            try diagnosed(.workspaceCopy) {
-                try copyCanonicalFiles(
-                    source: source,
-                    fingerprint: sourceBefore,
-                    workspace: workspace
-                )
-            }
+            let sourceBefore = try captureCanonicalFiles(source: source, workspace: workspace)
             let publishedFiles = sourceBefore.files.map {
                 CodexGhostRepairSnapshotPublishedFileEvidence(
                     fileName: $0.fileName,
@@ -1359,12 +1362,6 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             guard immutableAfter == immutableBefore else {
                 throw DiagnosticFailure(point: .workspacePostflight)
             }
-            let sourceAfter = try diagnosed(.publishedSourcePostflight) {
-                try source.fingerprint()
-            }
-            guard sourceAfter == sourceBefore else {
-                throw DiagnosticFailure(point: .publishedSourcePostflight)
-            }
             cleanupAttempted = true
             try diagnosed(.workspaceCleanup) { try workspace.remove() }
             return CodexGhostRepairInitialWitnessCatalogReadback(
@@ -1389,23 +1386,12 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         targetScope: TargetScope,
         workspaceFactory: CodexGhostRepairSnapshotAnalysisWorkspaceFactory
     ) throws -> (result: Result, sourceFingerprintHash: String) {
-        let sourceBefore = try diagnosed(.publishedSourcePreflight) {
-            let value = try source.fingerprint()
-            try value.validateHash()
-            return value
-        }
         let workspace = try diagnosed(.workspaceCreation) {
             try workspaceFactory.create()
         }
         var cleanupAttempted = false
         do {
-            try diagnosed(.workspaceCopy) {
-                try copyCanonicalFiles(
-                    source: source,
-                    fingerprint: sourceBefore,
-                    workspace: workspace
-                )
-            }
+            let sourceBefore = try captureCanonicalFiles(source: source, workspace: workspace)
             let publishedFiles = sourceBefore.files.map {
                 CodexGhostRepairSnapshotPublishedFileEvidence(
                     fileName: $0.fileName,
@@ -1454,12 +1440,6 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             guard immutableAfter == immutableBefore else {
                 throw DiagnosticFailure(point: .workspacePostflight)
             }
-            let sourceAfter = try diagnosed(.publishedSourcePostflight) {
-                try source.fingerprint()
-            }
-            guard sourceAfter == sourceBefore else {
-                throw DiagnosticFailure(point: .publishedSourcePostflight)
-            }
             cleanupAttempted = true
             try diagnosed(.workspaceCleanup) { try workspace.remove() }
             return (result, sourceBefore.fingerprintHash)
@@ -1506,9 +1486,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             }
 
             guard let desktop = connections[.desktop],
-                  let profile = CodexGhostRepairDatabaseSchemaProfile.admitted(
-                      desktopUserVersion: try desktop.schemaVersion()
-                  ) else {
+                  let profile = try desktop.exactDesktopProfile() else {
                 throw DiagnosticFailure(point: .desktopContract)
             }
 
@@ -1529,7 +1507,8 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
                             schemaVersion: try connection.schemaVersion(),
                             integrityCheckPassed: try connection.integrityCheck(),
                             foreignKeyViolationCount:
-                                try connection.foreignKeyViolationCount()
+                                try connection.foreignKeyViolationCount(),
+                            schemaProfileIdentifier: profile.evidenceIdentifier
                         )
                     }
                 }
@@ -1623,9 +1602,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             }
 
             guard let desktop = connections[.desktop],
-                  let profile = CodexGhostRepairDatabaseSchemaProfile.admitted(
-                      desktopUserVersion: try desktop.schemaVersion()
-                  ) else {
+                  let profile = try desktop.exactDesktopProfile() else {
                 throw DiagnosticFailure(point: .desktopContract)
             }
 
@@ -1646,7 +1623,8 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
                             schemaVersion: try connection.schemaVersion(),
                             integrityCheckPassed: try connection.integrityCheck(),
                             foreignKeyViolationCount:
-                                try connection.foreignKeyViolationCount()
+                                try connection.foreignKeyViolationCount(),
+                            schemaProfileIdentifier: profile.evidenceIdentifier
                         )
                     }
                 }
@@ -2071,74 +2049,18 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         })
     }
 
-    private static func copyCanonicalFiles(
+    private static func captureCanonicalFiles(
         source: CodexGhostRepairSnapshotCanonicalSource,
-        fingerprint: CodexGhostRepairSnapshotCanonicalFingerprint,
         workspace: CodexGhostRepairSnapshotAnalysisWorkspace
-    ) throws {
-        for (file, evidence) in zip(
-            source.profile.files,
-            fingerprint.files
-        ) where evidence.exists {
-            let destination = workspace.rootURL.appendingPathComponent(
-                evidence.fileName
-            )
-            let descriptor = Darwin.open(
-                destination.path,
-                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
-                S_IRUSR | S_IWUSR
-            )
-            guard descriptor >= 0 else {
-                throw CodexGhostRepairError.invalidProtectionEvidence(
-                    "Fresh review workspace file could not be created."
-                )
-            }
-            var primaryError: Error?
-            do {
-                guard fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
-                    throw CodexGhostRepairError.invalidProtectionEvidence(
-                        "Fresh review workspace file permissions are unavailable."
-                    )
-                }
-                try source.streamRawRead(
-                    file,
-                    expected: evidence
-                ) { data in
-                    var written = 0
-                    while written < data.count {
-                        let count = data.withUnsafeBytes { bytes in
-                            Darwin.write(
-                                descriptor,
-                                bytes.baseAddress!.advanced(by: written),
-                                data.count - written
-                            )
-                        }
-                        guard count > 0 else {
-                            return
-                        }
-                        written += count
-                    }
-                    guard written == data.count else {
-                        throw CodexGhostRepairError.invalidProtectionEvidence(
-                            "Fresh review workspace copy was incomplete."
-                        )
-                    }
-                }
-                guard fsync(descriptor) == 0 else {
-                    throw CodexGhostRepairError.invalidProtectionEvidence(
-                        "Fresh review workspace file could not be synchronized."
-                    )
-                }
-            } catch {
-                primaryError = error
-            }
-            let closeResult = Darwin.close(descriptor)
-            if let primaryError { throw primaryError }
-            guard closeResult == 0 else {
-                throw CodexGhostRepairError.invalidProtectionEvidence(
-                    "Fresh review workspace file could not be closed."
-                )
-            }
+    ) throws -> CodexGhostRepairSnapshotCanonicalFingerprint {
+        do {
+            let captured = try CodexGhostRepairSnapshotAnalysisCapture.capture(source: source, in: workspace)
+            try captured.validateHash()
+            return captured
+        } catch CodexGhostRepairError.targetDrift {
+            throw DiagnosticFailure(point: .canonicalCaptureDrift)
+        } catch {
+            throw DiagnosticFailure(point: .workspaceCopy)
         }
     }
 
@@ -2367,10 +2289,16 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
                 throw error
             }
             var pointer: OpaquePointer?
+            // These files belong to the guarded private workspace, never the
+            // canonical source. A checkpointed WAL database with no sidecars
+            // must not manufacture an empty WAL during query-only inspection.
+            // Existing WAL/journal files always retain ordinary SQLite handling.
+            let singleFile = CodexCompatibilitySidecars.read(at: url).allMissing
+            let sqlitePath = singleFile ? url.absoluteString + "?mode=ro&immutable=1" : url.path
             let result = sqlite3_open_v2(
-                url.path,
+                sqlitePath,
                 &pointer,
-                SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX,
+                SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_URI,
                 nil
             )
             guard result == SQLITE_OK, let pointer else {
@@ -2446,6 +2374,18 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             return Int32(value)
         }
 
+        func exactDesktopProfile() throws -> CodexGhostRepairDatabaseSchemaProfile? {
+            let version = try schemaVersion()
+            for profile in CodexGhostRepairDatabaseSchemaProfile.admittedProfiles
+                where profile.databaseVersions[.desktop] == version {
+                do {
+                    try validateDesktopContract(profile.desktopTables)
+                    return profile
+                } catch { continue }
+            }
+            return nil
+        }
+
         func validateM2cContract(
             for database: CodexGhostRepairSnapshotAnalysisDatabase,
             profile: CodexGhostRepairDatabaseSchemaProfile
@@ -2478,9 +2418,22 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
                     }
                     return name
                 }
+                let timedItems = database == .threadHistory && contract.table == "thread_items"
+                    && profile.timedHistoryRequired
+                let expected = contract.columns + (timedItems ? ["started_at_ms", "completed_at_ms"] : [])
+                if timedItems {
+                    guard rows.suffix(2).allSatisfy({ row in
+                        row.value(named: "type") == .text("INTEGER")
+                            && row.value(named: "notnull") == .integer(0)
+                            && row.value(named: "dflt_value") == .null
+                            && row.value(named: "pk") == .integer(0)
+                    }) else {
+                        throw CodexGhostRepairError.invalidDatabaseContract("Timed history column definitions changed.")
+                    }
+                }
                 let valid = contract.exact
-                    ? observed == contract.columns
-                    : contract.columns.allSatisfy(observed.contains)
+                    ? observed == expected
+                    : expected.allSatisfy(observed.contains)
                 guard valid else {
                     throw CodexGhostRepairError.invalidDatabaseContract(
                         "Published snapshot table contract is unsupported."

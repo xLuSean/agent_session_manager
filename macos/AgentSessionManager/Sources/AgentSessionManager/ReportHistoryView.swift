@@ -230,6 +230,17 @@ struct ReportHistoryView: View {
         if let report = selectedReport {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    if report.provider == .codex && report.operation == .permanentlyDelete && report.successCount > 0 {
+                        Button("Finish Cleanup…") {
+                            do {
+                                try model.queueRetainedNativeDeleteDesktopCleanup(reportID: report.reportID)
+                                dismiss()
+                            } catch { localError = error.localizedDescription }
+                        }
+                        .disabled(isWorking)
+                        .help("Review cleanup for the successful items in this retained Delete report. Delete will not be sent again.")
+                    }
+
                     detailSection("Report") {
                         detailRow("Report ID", report.reportID.uuidString.lowercased(), monospaced: true)
                         detailRow("Preview ID", report.previewID.uuidString.lowercased(), monospaced: true)
@@ -651,5 +662,96 @@ private extension PersistentReportOutcome {
         case .failure: .red
         case .unknown: .secondary
         }
+    }
+}
+
+
+/// A focused, manager-record-only entry; no live scan or deletion occurs here.
+struct DesktopCleanupFollowUpsView: View {
+    @EnvironmentObject private var model: SessionManagerModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [DesktopCleanupFollowUp] = []
+    @State private var nextCursor: OperationHistoryCursor?
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Finish Cleanup").font(.title2.weight(.semibold))
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            Text("Choose a previous deletion to check for remaining Desktop records and continue cleanup.")
+                .foregroundStyle(.secondary)
+            Text("These are saved results. A conversation may already be clean even if cleanup has not been checked.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange).textSelection(.enabled)
+                Button("Try Again") { Task { await load(reset: true) } }.disabled(isLoading)
+            }
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(entries) { entry in
+                        HStack(alignment: .top, spacing: 16) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(entry.title).font(.headline).lineLimit(2)
+                                if entry.deletedItems.count > 1 {
+                                    Text("and \(entry.deletedItems.count - 1) other conversations")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Text(entry.report.completedAt.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Label(entry.statusText, systemImage: entry.isVerified ? "checkmark.circle.fill" : "clock")
+                                    .font(.callout).foregroundStyle(entry.isVerified ? Color.green : Color.secondary)
+                            }
+                            Spacer()
+                            if entry.canContinue {
+                                Button("Review Cleanup…") {
+                                    do {
+                                        try model.queueRetainedNativeDeleteDesktopCleanup(reportID: entry.id)
+                                        dismiss()
+                                    } catch { errorMessage = error.localizedDescription }
+                                }
+                                .disabled(isLoading)
+                            }
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    if entries.isEmpty && !isLoading && errorMessage == nil {
+                        ContentUnavailableView("No saved deletions in this page", systemImage: "checklist",
+                            description: Text(nextCursor == nil
+                                ? "Successful Codex deletions appear here while their cleanup records are retained."
+                                : "Load earlier deletions to check for older cleanup records."))
+                    }
+                    if nextCursor != nil {
+                        Button("Load Earlier Deletions") { Task { await load(reset: false) } }.disabled(isLoading)
+                    }
+                    if isLoading { ProgressView("Reading saved cleanup results…") }
+                }
+            }
+            Divider()
+            Text("You can keep Codex open for the review. ASM will ask you to quit it before cleanup begins.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(22)
+        .frame(width: 640, height: 560)
+        .task { await load(reset: true) }
+    }
+
+    @MainActor private func load(reset: Bool) async {
+        guard !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            let page = try await model.desktopCleanupFollowUps(cursor: reset ? nil : nextCursor)
+            if reset { entries = page.entries } else { entries += page.entries }
+            nextCursor = page.nextCursor
+        } catch { errorMessage = error.localizedDescription }
     }
 }

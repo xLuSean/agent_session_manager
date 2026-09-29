@@ -1,4 +1,4 @@
 // Single version source; changed only when preparing a new candidate.
-MARKETING_VERSION = 0.1.105
-CURRENT_PROJECT_VERSION = 24
+MARKETING_VERSION = 0.1.113
+CURRENT_PROJECT_VERSION = 32
 ASM_RELEASE_SUFFIX = alpha.1

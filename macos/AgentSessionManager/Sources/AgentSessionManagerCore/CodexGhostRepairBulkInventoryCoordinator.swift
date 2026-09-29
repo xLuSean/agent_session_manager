@@ -15,6 +15,8 @@ public struct CodexGhostRepairBulkInventoryRequest:
 
     public var acceptsCallerPath: Bool { false }
     public var acceptsCallerThreadIDs: Bool { false }
+    // This request does not schedule work. The App owns the timing of both
+    // its display-only overview checks and user-requested batch scans.
     public var automaticObservation: Bool { false }
     public var persistsPreview: Bool { false }
     public var confirmationAuthority: Bool { false }
@@ -77,6 +79,7 @@ public enum CodexGhostRepairBulkInventoryFailureStage:
     case requestValidation = "request-validation"
     case snapshotRead = "snapshot-read"
     case canonicalSourceRead = "canonical-source-read"
+    case canonicalSourceBusy = "canonical-source-busy"
     case officialInventory = "official-inventory"
     case snapshotProfile = "snapshot-profile"
     case presentControl = "present-control"
@@ -93,6 +96,7 @@ public struct CodexGhostRepairBulkInventoryFailure:
     Sendable
 {
     public let stage: CodexGhostRepairBulkInventoryFailureStage
+    public var readerReason: CodexGhostRepairSnapshotAnalysisFailureReason? = nil
 
     public var pathRedacted: Bool { true }
     public var rawErrorIncluded: Bool { false }
@@ -252,6 +256,11 @@ actor CodexGhostRepairBulkInventoryCandidateCoordinator:
             observed = try await transport.inventory()
         } catch {
             return unavailable(request.requestID, stage: .officialInventory)
+        }
+
+        guard CodexGhostRepairPackagedReadOnlyProfileCatalog
+            .supportsObservationRuntime(observed.runtimeVersion) else {
+            return unavailable(request.requestID, stage: .snapshotProfile)
         }
 
         let validated: ValidatedOfficialInventory
@@ -657,19 +666,13 @@ actor CodexGhostRepairBulkLiveScanCoordinator:
         let validated:
             CodexGhostRepairBulkInventoryCandidateCoordinator
                 .ValidatedOfficialInventory
-        let profile: CodexGhostRepairSnapshotSourceProfile
+        guard let profile = CodexGhostRepairSnapshotRequestBoundProfileSelection
+            .selectProfile(exactRuntimeVersion: observed.runtimeVersion) else {
+            return unavailable(request.requestID, stage: .snapshotProfile)
+        }
         do {
             validated = try CodexGhostRepairBulkInventoryCandidateCoordinator
                 .validateOfficialInventory(observed)
-            guard let selected =
-                CodexGhostRepairSnapshotRequestBoundProfileSelection
-                    .selectProfile(
-                        exactRuntimeVersion: observed.runtimeVersion
-                    )
-            else {
-                return unavailable(request.requestID, stage: .snapshotProfile)
-            }
-            profile = selected
         } catch {
             return unavailable(request.requestID, stage: .officialInventory)
         }
@@ -687,7 +690,11 @@ actor CodexGhostRepairBulkLiveScanCoordinator:
                 live = try liveReader.read(profile: profile)
             }
         } catch {
-            return unavailable(request.requestID, stage: .canonicalSourceRead)
+            let reason = CodexGhostRepairBulkCanonicalQueryOnlyReader.failureReason(for: error)
+            return .unavailable(requestID: request.requestID, failure: .init(
+                stage: reason == .canonicalCaptureDrift ? .canonicalSourceBusy : .canonicalSourceRead,
+                readerReason: reason
+            ))
         }
         guard profile.admits(databases: live.databases),
               CodexGhostRepairPackagedReadOnlyProfileCatalog.supportsPair(
@@ -963,7 +970,7 @@ struct CodexGhostRepairBulkPublishedSnapshotResumeResolver:
             snapshotReader: snapshotReader,
             requiredSourceLayoutIdentifier:
                 CodexGhostRepairPackagedReadOnlyProfileCatalog
-                    .v1534SourceLayoutIdentifier
+                    .v156SourceLayoutIdentifier
         )
     }
 

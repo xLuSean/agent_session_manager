@@ -298,18 +298,28 @@ final class CodexCompatibilityDatabaseTests: XCTestCase {
         XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .indexes)
     }
 
-    func testExtendedV34IsExactInspectionOnlyAndKeepsProductionAdmissionSeparate() throws {
+    func testExtendedV34RequiresMatchingTimedHistoryBeforeAdmission() throws {
         let file = try fixture(.desktop, profile: .desktopV34Extended)
         let first = try CodexCompatibilityDatabase.metadata(at: file)
         XCTAssertNil(first.check?.issue)
-        XCTAssertEqual(first.check?.inspectionOnly, true)
+        XCTAssertEqual(first.check?.inspectionOnly, false)
         XCTAssertEqual(first.desktopProfile, "desktop-v34-extended")
-        XCTAssertFalse(CodexGhostRepairDatabaseSchemaProfile.admittedProfiles.contains(.desktopV34Extended))
-        XCTAssertNil(CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(exactRuntimeVersion: "0.156.1"))
+        XCTAssertTrue(CodexGhostRepairDatabaseSchemaProfile.admittedProfiles.contains(.desktopV34Extended))
+        XCTAssertEqual(CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(exactRuntimeVersion: "0.156.1"), .v156DesktopV34Extended)
         let result = CodexCompatibilityEvaluator.results(version: "0.156.1", browsing: true, archive: true, restore: true,
             delete: true, desktopVersion: "0.158.0-alpha.2.1", desktopSchemaProfile: first.desktopProfile,
             desktopMetadataAvailable: true, desktopDatabaseChecks: [first.check!], desktopIdentityVerified: true)
         XCTAssertEqual(result.last?.status, .needsBehaviorVerification)
+        let history = try fixture(.threadHistory)
+        try execute(history, "ALTER TABLE thread_items ADD COLUMN started_at_ms INTEGER; ALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;")
+        let historyCheck = try XCTUnwrap(CodexCompatibilityDatabase.metadata(at: history).check)
+        for runtime in ["0.156.1", "0.157.1"] {
+            XCTAssertEqual(CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(exactRuntimeVersion: runtime), .v156DesktopV34Extended)
+            let supported = CodexCompatibilityEvaluator.results(version: runtime, browsing: true, archive: true, restore: true,
+                delete: true, desktopVersion: "0.158.0-alpha.2.1", desktopSchemaProfile: first.desktopProfile,
+                desktopMetadataAvailable: true, desktopDatabaseChecks: [first.check!, historyCheck], desktopIdentityVerified: true)
+            XCTAssertEqual(supported.last?.status, .supportedByBuild)
+        }
         try execute(file, "ALTER TABLE automations ADD COLUMN unreviewed TEXT;")
         XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
     }
@@ -329,7 +339,7 @@ final class CodexCompatibilityDatabaseTests: XCTestCase {
         try execute(file, "ALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;")
         let check = try XCTUnwrap(CodexCompatibilityDatabase.metadata(at: file).check)
         XCTAssertNil(check.issue)
-        XCTAssertEqual(check.inspectionOnly, true)
+        XCTAssertEqual(check.inspectionOnly, false)
         let result = CodexCompatibilityEvaluator.results(version: "0.153.4", browsing: true, archive: true, restore: true,
             delete: true, desktopVersion: "0.153.4", desktopSchemaProfile: "desktop-v34", desktopMetadataAvailable: true,
             desktopDatabaseChecks: [check], desktopIdentityVerified: true)
