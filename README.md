@@ -108,8 +108,8 @@ Every mutation follows the same path:
 Exact selection → Frozen Preview → Confirm → Execute once → Fresh readback → Itemized Report
 ```
 
-- If inventory or protection evidence drifts after Preview, the entire batch fails closed.
-- A failure or unknown result stops the batch. The app never silently narrows the selection or retries automatically.
+- Every selected session is checked again after Preview. Shared environment failures block the batch; a changed state or protection check skips only that Delete item and records it as not attempted.
+- Delete continues other selected items after a failure confirmed by both official readbacks. Unknown results stop remaining requests; Archive and Restore also stop on failure. No request is retried automatically.
 - Reversible actions require reviewing the Preview and pressing Confirm.
 - Permanent Delete and clearing Report History require an exact confirmation token. Ghost cleanup uses one button confirmation bound internally to the selected batch.
 - Delete accepts only sessions in the Manager Trash Bin. Only **Deletion and Desktop cleanup verified** confirms

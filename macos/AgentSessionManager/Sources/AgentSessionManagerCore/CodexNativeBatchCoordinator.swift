@@ -115,7 +115,8 @@ actor CodexNativeBatchTransport: CodexNativeBatchMutationTransport {
 /// One durable, exact-selection batch authorization boundary for Codex native
 /// lifecycle operations. Codex has no cross-thread transaction, so all items
 /// are preflighted before the first request and requests are sent in frozen
-/// manager-key order. A failure or unknown result stops the remaining prefix.
+/// manager-key order (selected forks precede their history sources for Delete).
+/// Known Delete failures are isolated; unknown results stop remaining requests.
 public actor CodexNativeBatchCoordinator {
     private let store: SQLiteStateStore
     private let transport: any CodexNativeBatchMutationTransport
@@ -382,14 +383,16 @@ public actor CodexNativeBatchCoordinator {
         let results: [PersistentReportItem]
         do {
             let preflight = try await transport.inventorySnapshot()
-            try validateWholeBatchPreflight(
+            let blockedItems = try validateWholeBatchPreflight(
                 preflight,
                 preview: claimed.preview,
                 checkpoint: claimed.checkpoint
             )
-            results = await executeFrozenPrefix(
+            results = try await executeFrozenSelection(
                 preview: claimed.preview,
-                checkpoint: claimed.checkpoint
+                checkpoint: claimed.checkpoint,
+                forkNodes: preflight.archiveScopeNodes,
+                blockedItems: blockedItems
             )
         } catch {
             let completedAt = max(startedAt, now())
@@ -491,18 +494,34 @@ public actor CodexNativeBatchCoordinator {
         _ snapshot: ProviderInventorySnapshot,
         preview: PersistentOperationPreview,
         checkpoint: ProviderCheckpointRecord
-    ) throws {
+    ) throws -> [String: PersistentReportItem] {
         guard snapshot.provider == .codex,
               snapshot.inventoryComplete,
               snapshot.runtimeVersion == checkpoint.runtimeVersion,
               snapshot.compatibilityBinding == checkpoint.compatibilityBinding,
-              snapshot.observedAt >= checkpoint.refreshedAt else {
+              snapshot.observedAt >= checkpoint.refreshedAt,
+              Set(snapshot.sessions.map(\.id)).count == snapshot.sessions.count else {
             throw PersistentStateError.invalidRecord(
                 "The complete Codex batch preflight is unavailable or predates the Preview."
             )
         }
         let sessionsByKey = Dictionary(uniqueKeysWithValues: snapshot.sessions.map { ($0.id, $0) })
+        var blockedItems: [String: PersistentReportItem] = [:]
         for item in preview.items {
+            if preview.operation == .permanentlyDelete {
+                let session = sessionsByKey[item.managerKey]
+                if session?.nativeID != item.nativeSessionID
+                    || session?.nativeState != item.expectedNativeState
+                    || session?.descendantCountKnown != true
+                    || session?.descendantCount != 0
+                    || session?.protection.blocksDeleteAttempt != false {
+                    blockedItems[item.managerKey] = failure(
+                        item.managerKey, state: session?.nativeState ?? .unavailable,
+                        at: snapshot.observedAt, code: "delete_item_preflight_rejected",
+                        message: "\(item.expectedTitle) (\(item.nativeSessionID)): state or protection changed. This item was not attempted; other eligible selections can continue.")
+                }
+                continue
+            }
             guard let session = sessionsByKey[item.managerKey],
                   session.nativeID == item.nativeSessionID,
                   session.nativeState == item.expectedNativeState else {
@@ -535,17 +554,29 @@ public actor CodexNativeBatchCoordinator {
                 )
             }
         }
+        return blockedItems
     }
 
-    private func executeFrozenPrefix(
+    private func executeFrozenSelection(
         preview: PersistentOperationPreview,
-        checkpoint: ProviderCheckpointRecord
-    ) async -> [PersistentReportItem] {
-        var results: [PersistentReportItem] = []
+        checkpoint: ProviderCheckpointRecord,
+        forkNodes: [ArchiveScopeNode],
+        blockedItems: [String: PersistentReportItem]
+    ) async throws -> [PersistentReportItem] {
+        let order = preview.operation == .permanentlyDelete
+            ? try SessionForkHistory.deletionOrder(preview.items.map(\.nativeSessionID), nodes: forkNodes)
+            : preview.items.map(\.nativeSessionID)
+        let itemsByID = Dictionary(uniqueKeysWithValues: preview.items.map { ($0.nativeSessionID, $0) })
+        var results: [String: PersistentReportItem] = [:]
         var stopped = false
-        for item in preview.items {
+        for id in order {
+            guard let item = itemsByID[id] else { continue }
+            if let blocked = blockedItems[item.managerKey] {
+                results[item.managerKey] = blocked
+                continue
+            }
             if stopped {
-                results.append(notAttempted(item.managerKey))
+                results[item.managerKey] = notAttempted(item.managerKey)
                 continue
             }
             let result = await executeOne(
@@ -553,10 +584,11 @@ public actor CodexNativeBatchCoordinator {
                 operation: preview.operation,
                 checkpoint: checkpoint
             )
-            results.append(result)
-            stopped = result.outcome != .success
+            results[item.managerKey] = result
+            stopped = result.outcome == .unknown
+                || (preview.operation != .permanentlyDelete && result.outcome != .success)
         }
-        return results
+        return preview.items.map { results[$0.managerKey] ?? notAttempted($0.managerKey) }
     }
 
     private func executeOne(
@@ -664,6 +696,13 @@ public actor CodexNativeBatchCoordinator {
             )
         }
         if let observed = inventory.sessions.first(where: { $0.id == item.managerKey }) {
+            guard observed.nativeID == item.nativeSessionID,
+                  case let .present(nativeID, exactAt, exactRuntime) = exactRead,
+                  nativeID == item.nativeSessionID, exactAt >= evidenceAt,
+                  exactRuntime == runtimeVersion else {
+                return unknown(item.managerKey, code: "delete_batch_readback_inconsistent",
+                               message: "The inventory still lists this conversation, but exact readback could not confirm the same state. No retry was sent.")
+            }
             return failure(
                 item.managerKey,
                 state: observed.nativeState,
@@ -873,7 +912,7 @@ public actor CodexNativeBatchCoordinator {
             state: .unavailable,
             at: now(),
             code: "batch_not_attempted",
-            message: "No provider request was sent because an earlier batch item failed or became unknown."
+            message: "No provider request was sent because an earlier item required the batch to stop. Review its result before starting a new preview."
         )
     }
 
@@ -925,7 +964,9 @@ public actor CodexNativeBatchCoordinator {
     private func batchWarnings(operation: SessionOperation) -> [String] {
         var warnings = [
             "Every selected session is frozen and preflighted before the first request.",
-            "Codex has no cross-session transaction. Requests run in exact sorted order and stop after the first failure or unknown result; no request is retried automatically.",
+            operation == .emptyTrash
+                ? "Codex has no cross-session transaction. Selected forks run before their history sources. A verified individual failure does not stop other selected items; an unknown result stops remaining requests. No request is retried automatically."
+                : "Codex has no cross-session transaction. Requests run in exact sorted order and stop after the first failure or unknown result; no request is retried automatically.",
         ]
         if operation == .emptyTrash {
             warnings.insert(
@@ -933,7 +974,7 @@ public actor CodexNativeBatchCoordinator {
                 at: 0
             )
             warnings.insert(
-                "Cross-host running/current evidence may be unavailable. Each Delete is attempted once; failure or unknown stops the batch, keeps unresolved sessions in Trash, and is never retried automatically.",
+                "Cross-host running/current evidence may be unavailable. Each Delete is attempted at most once. Unselected forks are kept and may prevent deleting their history source. Unresolved sessions remain in Trash.",
                 at: 1
             )
         }

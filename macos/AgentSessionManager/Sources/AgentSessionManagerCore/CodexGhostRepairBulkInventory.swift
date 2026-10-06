@@ -468,6 +468,7 @@ enum CodexGhostRepairBulkInventoryBuilder {
         CodexGhostRepairPackagedReadOnlyProfileCatalog
             .v1534SourceLayoutIdentifier,
         CodexGhostRepairPackagedReadOnlyProfileCatalog.v156SourceLayoutIdentifier,
+        CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier,
     ]
 
     static func build(

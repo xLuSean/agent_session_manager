@@ -65,10 +65,16 @@ struct CodexThreadRecord: Codable, Hashable, Sendable {
     let gitInfo: CodexGitInfo?
     /// In-memory provenance, never supplied by an official JSON response.
     var localSupplement: CodexLocalInventorySupplement? = nil
+    /// The original fork source, distinct from a subagent parent. Provenance
+    /// does not by itself prove which persisted history segments are shared.
+    var forkedFromId: String? = nil
+    /// Only an exact metadata read with an explicit forkedFromId field can
+    /// establish this; state-DB-only list responses omit fork metadata.
+    var forkHistoryReadComplete = false
 
     private enum CodingKeys: String, CodingKey {
         case id, sessionId, parentThreadId, preview, ephemeral, modelProvider,
-             createdAt, updatedAt, status, cwd, cliVersion, name, isPinned, gitInfo
+             createdAt, updatedAt, status, cwd, cliVersion, name, isPinned, gitInfo, forkedFromId
     }
 }
 
@@ -79,6 +85,19 @@ struct CodexThreadPage: Codable, Hashable, Sendable {
 
 struct CodexThreadReadResponse: Codable, Hashable, Sendable {
     let thread: CodexThreadRecord
+}
+
+extension CodexThreadReadResponse {
+    private enum ResponseKeys: String, CodingKey { case thread }
+    private enum ForkKeys: String, CodingKey { case forkedFromId }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: ResponseKeys.self)
+        var record = try container.decode(CodexThreadRecord.self, forKey: .thread)
+        let metadata = try container.nestedContainer(keyedBy: ForkKeys.self, forKey: .thread)
+        record.forkHistoryReadComplete = metadata.contains(.forkedFromId)
+        thread = record
+    }
 }
 
 private struct CodexThreadLifecycleResponse: Decodable {}
@@ -1143,6 +1162,19 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
             descendantNativeStates[record.id] = .archived
         }
 
+        // useStateDbOnly intentionally avoids scan-and-repair, but its list
+        // records do not hydrate forkedFromId. Read only metadata through the
+        // official API, retaining list-owned state and protection unchanged.
+        let forkDeadline = Date().addingTimeInterval(5)
+        descendantRecords = CodexForkHistoryInventory.hydrate(records: descendantRecords, deadline: forkDeadline) { id in
+            defer { requestID += 1 }
+            let response: CodexThreadReadResponse = try request(
+                process: process, input: input.fileHandleForWriting, reader: reader, id: requestID,
+                method: "thread/read", params: ["threadId": id, "includeTurns": false],
+                timeout: min(2, max(0.01, forkDeadline.timeIntervalSinceNow)))
+            return response.thread
+        }
+
         var desktopPinnedThreadIDs: Set<String> = []
         var desktopPinStateAvailable = false
         var desktopPinStateError: String?
@@ -1255,9 +1287,10 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
         reader: JSONLineReader,
         id: Int,
         method: String,
-        params: [String: Any]
+        params: [String: Any],
+        timeout: TimeInterval? = nil
     ) throws -> Response {
-        let deadline = Date().addingTimeInterval(configuration.timeout)
+        let deadline = Date().addingTimeInterval(timeout ?? configuration.timeout)
         do {
             try send(["method": method, "id": id, "params": params], to: input)
         } catch {
@@ -1767,6 +1800,8 @@ public actor CodexAppServerProvider: SessionProvider, ExactSessionReadbackProvid
                 managerKey: "\(AgentSystem.codex.rawValue):\(record.id)",
                 nativeSessionID: record.id,
                 parentNativeSessionID: record.parentThreadId,
+                forkedFromNativeSessionID: record.forkedFromId,
+                forkHistoryKnown: record.forkHistoryReadComplete,
                 title: displayTitle(for: record),
                 nativeState: nativeState,
                 protection: protection,

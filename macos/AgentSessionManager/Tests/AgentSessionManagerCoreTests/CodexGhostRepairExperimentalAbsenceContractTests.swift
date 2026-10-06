@@ -141,7 +141,7 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry
             .packagedCurrent()
 
-        XCTAssertEqual(registry.admittedProfileCount, 9)
+        XCTAssertEqual(registry.admittedProfileCount, 11)
         guard case let .matched(evidence) = registry.evaluate(
             makeV151Observation(
                 runtimeVersion: "0.152.1",
@@ -187,7 +187,7 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry
             .packagedCurrent()
 
-        XCTAssertEqual(registry.admittedProfileCount, 9)
+        XCTAssertEqual(registry.admittedProfileCount, 11)
         for (runtime, profile) in [
             ("0.153.1", "desktop-bundled-0.153.1"),
             ("0.153.2", "provider-0.153.2"),
@@ -257,11 +257,30 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         XCTAssertFalse(CodexGhostRepairPackagedReadOnlyProfileCatalog.supportsObservationRuntime("0.157.2"))
     }
 
+    func testV160AbsenceBindsSharedProviderToExactSourceAndSchema() {
+        let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry.packagedCurrent()
+        for runtime in ["0.157.1", "0.160.0"] {
+            let observation = makeV151Observation(runtimeVersion: runtime,
+                sourceLayoutIdentifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier,
+                desktopSchemaVersion: 34, schemaProfileIdentifier: "desktop-v34-async")
+            guard case let .matched(evidence) = registry.evaluate(observation, freshPresentControlVerified: true) else {
+                return XCTFail("Exact async pair should match")
+            }
+            XCTAssertEqual(evidence.databaseSchemaProfileIdentifier, "desktop-v34-async")
+            XCTAssertEqual(registry.evaluate(observation, freshPresentControlVerified: false), .unavailable(.freshPresentControlUnavailable))
+            let oldEvidence = makeV151Observation(runtimeVersion: runtime,
+                sourceLayoutIdentifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier,
+                desktopSchemaVersion: 34, schemaProfileIdentifier: "desktop-v34-extended")
+            XCTAssertEqual(registry.evaluate(oldEvidence, freshPresentControlVerified: true), .unavailable(.snapshotSchemaDrift))
+        }
+        XCTAssertFalse(CodexGhostRepairPackagedReadOnlyProfileCatalog.supportsObservationRuntime("0.160.1"))
+    }
+
     func testCurrentRegistryAdmitsOnlyProviderV1534ForExactDesktopV34Source() {
         let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry
             .packagedCurrent()
 
-        XCTAssertEqual(registry.admittedProfileCount, 9)
+        XCTAssertEqual(registry.admittedProfileCount, 11)
         guard case let .matched(evidence) = registry.evaluate(
             makeV151Observation(
                 runtimeVersion: "0.153.4",
@@ -348,7 +367,7 @@ final class CodexGhostRepairExperimentalAbsenceContractTests:
         let registry = CodexGhostRepairVersionSpecificReadOnlyRegistry
             .packagedCurrent()
 
-        XCTAssertEqual(registry.admittedProfileCount, 9)
+        XCTAssertEqual(registry.admittedProfileCount, 11)
         guard case let .matched(evidence) = registry.evaluate(
             makeV151Observation(
                 runtimeVersion: "0.153.4",

@@ -191,12 +191,9 @@ public struct CodexGhostRepairSnapshotActionRequest: Equatable, Sendable {
         if let evidence = initialWitnessEvidence {
             guard evidence.threadIDs == review.targetThreadIDs,
                   evidence.runtimeVersion == review.runtimeVersion,
-                  let profile =
-                    CodexGhostRepairSnapshotRequestBoundProfileSelection
-                        .selectProfile(
-                            exactRuntimeVersion: review.runtimeVersion
-                        ),
-                  evidence.sourceLayoutIdentifier == profile.identifier,
+                  let profile = CodexGhostRepairSnapshotSourceProfile.admitted(
+                    sourceLayoutIdentifier: evidence.sourceLayoutIdentifier),
+                  profile.supports(runtimeVersion: review.runtimeVersion),
                   Self.isCanonicalSHA256(evidence.sourceFingerprintHash)
             else {
                 throw CodexGhostRepairError.invalidProtectionEvidence(

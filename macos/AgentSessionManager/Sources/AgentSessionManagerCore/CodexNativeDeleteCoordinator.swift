@@ -157,6 +157,34 @@ actor DeleteAuthorizationCoordinator {
 
 public typealias NativeDeleteReportItem = NativeArchiveReportItem
 
+public extension NativeArchiveReportItem {
+    var deletionWasNotAttempted: Bool {
+        ["batch_not_attempted", "batch_preflight_rejected", "delete_item_preflight_rejected"].contains(errorCode ?? "")
+    }
+
+    var deletionResultLabel: String {
+        deletionWasNotAttempted ? "Not attempted" : outcome.rawValue.capitalized
+    }
+
+    var deletionHasForkHistoryBlocker: Bool {
+        message?.localizedCaseInsensitiveContains("forked history") == true
+    }
+
+    var deletionExplanation: String {
+        if deletionHasForkHistoryBlocker {
+            return "This conversation is still used by another fork. Open Review Fork History below to find its forks. Move the forks you choose to Trash, then select them together with this conversation and confirm a new Delete preview. A fork you keep may still prevent deleting this source."
+        }
+        switch errorCode {
+        case "batch_not_attempted":
+            return "No Delete request was sent for this conversation because the batch stopped. It can be selected in a new preview."
+        case "batch_preflight_rejected", "delete_item_preflight_rejected":
+            return "No Delete request was sent. Its state or the required checks changed; refresh and review this conversation."
+        default:
+            return message ?? (outcome == .success ? "Official absence verified." : "Review this conversation's result before continuing.")
+        }
+    }
+}
+
 public struct NativeDeleteReport: Identifiable, Sendable {
     public let id: UUID
     public let previewID: UUID
@@ -166,7 +194,8 @@ public struct NativeDeleteReport: Identifiable, Sendable {
     public let recoveredAfterInterruption: Bool
 
     public var successCount: Int { items.filter { $0.outcome == .success }.count }
-    public var failureCount: Int { items.filter { $0.outcome == .failure }.count }
+    public var failureCount: Int { items.filter { $0.outcome == .failure && !$0.deletionWasNotAttempted }.count }
+    public var notAttemptedCount: Int { items.filter(\.deletionWasNotAttempted).count }
     public var unknownCount: Int { items.filter { $0.outcome == .unknown }.count }
 
     public init(

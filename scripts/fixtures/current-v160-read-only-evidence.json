@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 1,
+  "evidenceKey": "CURRENT-V157-DESKTOP-V160",
+  "observation": "Exact isolated missing-thread probes; source member metadata only",
+  "observedOn": "2026-10-05T21:44:48.504Z",
+  "desktopApp": {
+    "name": "ChatGPT.app",
+    "version": "26.930.51102",
+    "build": "13100"
+  },
+  "runtimeProfiles": [
+    {
+      "profileIdentifier": "desktop-bundled-0.160.0",
+      "role": "desktop_bundled",
+      "runtimeVersion": "0.160.0",
+      "executableSha256": "6b582e8813ce7e8ed4c52814ee5cf230dba647bf2292df747a4003f2657ef201",
+      "generatedProtocol": {
+        "schemaVersion": "v2",
+        "schemaFiles": [
+          "ThreadReadParams.json",
+          "ThreadReadResponse.json",
+          "ThreadArchiveParams.json",
+          "ThreadArchiveResponse.json",
+          "ThreadArchivedNotification.json",
+          "ThreadUnarchiveParams.json",
+          "ThreadUnarchiveResponse.json",
+          "ThreadUnarchivedNotification.json",
+          "ThreadDeleteParams.json",
+          "ThreadDeleteResponse.json",
+          "ThreadDeletedNotification.json"
+        ],
+        "canonicalization": "JSON object keyed by file name; sorted keys, compact separators",
+        "schemaBundleSha256": "6000258c0b2e4c50f62b587e84fbc823ae9a3e9e9a626d9a2290a5696ca78f4c"
+      },
+      "missingThreadRead": {
+        "method": "thread/read",
+        "includeTurns": false,
+        "outcome": "rpc_error",
+        "rpcCode": -32600,
+        "messageTemplate": "thread not loaded: {thread_id}",
+        "errorObjectKeys": [
+          "code",
+          "message"
+        ],
+        "syntheticThreadIDStoredInEvidence": false,
+        "syntheticThreadIDSha256": "3d3cd21b448d4b2f838f69c0ea3bdd181e52231ec99bc26995065e780951e933"
+      },
+      "requestBoundary": {
+        "initializeRequests": 1,
+        "initializedNotifications": 1,
+        "threadReadRequests": 1,
+        "threadListRequests": 0,
+        "lifecycleMutationRequests": 0,
+        "otherRequests": 0,
+        "existingThreadIDsRead": 0
+      }
+    },
+    {
+      "profileIdentifier": "provider-0.157.1",
+      "role": "provider_stable",
+      "runtimeVersion": "0.157.1",
+      "executableSha256": "27ceb5f9b957b43a519efe4eaa3816a0bffb0a531a2c89af18840c0a3c016a7d",
+      "generatedProtocol": {
+        "schemaVersion": "v2",
+        "schemaFiles": [
+          "ThreadReadParams.json",
+          "ThreadReadResponse.json",
+          "ThreadArchiveParams.json",
+          "ThreadArchiveResponse.json",
+          "ThreadArchivedNotification.json",
+          "ThreadUnarchiveParams.json",
+          "ThreadUnarchiveResponse.json",
+          "ThreadUnarchivedNotification.json",
+          "ThreadDeleteParams.json",
+          "ThreadDeleteResponse.json",
+          "ThreadDeletedNotification.json"
+        ],
+        "canonicalization": "JSON object keyed by file name; sorted keys, compact separators",
+        "schemaBundleSha256": "90694a7650d707ed49d43eaf6b300d2ea049b00f98edbbffe1d93d83e466f5dd"
+      },
+      "missingThreadRead": {
+        "method": "thread/read",
+        "includeTurns": false,
+        "outcome": "rpc_error",
+        "rpcCode": -32600,
+        "messageTemplate": "thread not loaded: {thread_id}",
+        "errorObjectKeys": [
+          "code",
+          "message"
+        ],
+        "syntheticThreadIDStoredInEvidence": false,
+        "syntheticThreadIDSha256": "2f6aa28254a97287f8322bb365c5d6dc4ebd3c530e6f82e43872a91df0438d40"
+      },
+      "requestBoundary": {
+        "initializeRequests": 1,
+        "initializedNotifications": 1,
+        "threadReadRequests": 1,
+        "threadListRequests": 0,
+        "lifecycleMutationRequests": 0,
+        "otherRequests": 0,
+        "existingThreadIDsRead": 0
+      }
+    }
+  ],
+  "sourceLayout": {
+    "identifier": "codex-cli-0.160.0-desktop-v34-async-20-member-v1",
+    "sourceOwner": "desktop-bundled-0.160.0",
+    "runtimeProfileIdentifier": "desktop-bundled-0.160.0",
+    "desktopSchemaProfile": "desktop-v34-async",
+    "memberCount": 20,
+    "layoutDigest": "75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85",
+    "members": [
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-dev.db",
+        "requiredDatabase": true,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-dev.db-wal",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-dev.db-shm",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-dev.db-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-thread-summaries-dev.db",
+        "requiredDatabase": true,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-thread-summaries-dev.db-wal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-thread-summaries-dev.db-shm",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-thread-summaries-dev.db-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-history-snapshots-dev.db",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-history-snapshots-dev.db-wal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-history-snapshots-dev.db-shm",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-history-snapshots-dev.db-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "state_5.sqlite",
+        "requiredDatabase": true,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "state_5.sqlite-wal",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "state_5.sqlite-shm",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "state_5.sqlite-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "thread_history_1.sqlite",
+        "requiredDatabase": true,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "thread_history_1.sqlite-wal",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "thread_history_1.sqlite-shm",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "thread_history_1.sqlite-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      }
+    ],
+    "allRequiredDatabaseFilesRegular": true,
+    "clearSourcePathPersisted": false,
+    "rawDatabaseContentsRead": false,
+    "sqliteAPICalls": 0,
+    "filesystemWrites": 0
+  },
+  "safetyContract": {
+    "existingThreadReads": 0,
+    "lifecycleMutationRequestsSent": 0,
+    "rawDatabaseContentsRead": 0,
+    "runtimeHomes": "separate temporary directories",
+    "mutationAuthorityGranted": false
+  }
+}

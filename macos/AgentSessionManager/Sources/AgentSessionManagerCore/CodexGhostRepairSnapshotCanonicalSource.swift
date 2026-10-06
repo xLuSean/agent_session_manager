@@ -29,6 +29,8 @@ enum CodexGhostRepairSnapshotSourceLayout {
             || normalized == "codex-cli 0.157.1"
             || normalized == "0.158.0-alpha.2.1"
             || normalized == "codex-cli 0.158.0-alpha.2.1"
+            || normalized == "0.160.0"
+            || normalized == "codex-cli 0.160.0"
     }
 }
 
@@ -114,6 +116,13 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
         layoutDigest: "sha256:75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85"
     )
 
+    static let v160DesktopV34Async = Self(
+        identifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier,
+        ownerRuntimeProfileIdentifier: "desktop-bundled-0.160.0",
+        databaseSchemaProfileIdentifier: "desktop-v34-async",
+        layoutDigest: "sha256:75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85"
+    )
+
     static func admitted(sourceLayoutIdentifier: String) -> Self? {
         switch sourceLayoutIdentifier {
         case v149DesktopV32.identifier: v149DesktopV32
@@ -122,6 +131,7 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
         case v153DesktopV34.identifier: v153DesktopV34
         case v1534DesktopV34.identifier: v1534DesktopV34
         case v156DesktopV34Extended.identifier: v156DesktopV34Extended
+        case v160DesktopV34Async.identifier: v160DesktopV34Async
         default: nil
         }
     }
@@ -152,6 +162,8 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
                 || normalized == "codex-cli 0.153.4"
         case Self.v156DesktopV34Extended.identifier:
             return ["0.156.1", "codex-cli 0.156.1", "0.157.1", "codex-cli 0.157.1", "0.158.0-alpha.2.1", "codex-cli 0.158.0-alpha.2.1"].contains(normalized)
+        case Self.v160DesktopV34Async.identifier:
+            return ["0.157.1", "codex-cli 0.157.1", "0.160.0", "codex-cli 0.160.0"].contains(normalized)
         default:
             return false
         }

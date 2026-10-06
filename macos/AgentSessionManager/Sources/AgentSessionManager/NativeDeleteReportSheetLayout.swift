@@ -18,8 +18,4 @@ enum NativeDeleteReportSheetLayout {
             height: min(720, max(1, visibleScreenSize.height - 120))
         )
     }
-
-    static func tableHeight(itemCount: Int) -> CGFloat {
-        min(300, 60 + CGFloat(min(6, max(0, itemCount))) * 40)
-    }
 }

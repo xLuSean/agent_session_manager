@@ -638,6 +638,8 @@ final class SessionManagerModel: ObservableObject {
     /// Single row used by the Inspector. Batch lifecycle selection is owned by
     /// `selection` and changes only through the explicit row checkboxes.
     @Published var focusedSessionID: String?
+    @Published var forkHistoryNodes: [ArchiveScopeNode] = []
+    @Published var forkHistoryComplete = false
     @Published var pendingPreview: OperationPreview?
     @Published var pendingNativeArchivePreview: OperationPreview?
     @Published var pendingNativeRestorePreview: OperationPreview?
@@ -1327,6 +1329,33 @@ final class SessionManagerModel: ObservableObject {
 
     func clearSessionSearch() {
         searchText = ""
+    }
+
+    func forkHistoryIDs(for nativeID: String) -> [String] {
+        SessionForkHistory.familyIDs(of: nativeID, nodes: forkHistoryNodes).sorted()
+    }
+
+    func dependentForkHistoryIDs(for nativeID: String) -> Set<String> {
+        SessionForkHistory.dependentIDs(of: nativeID, nodes: forkHistoryNodes)
+    }
+
+    func conversationTitle(for nativeID: String) -> String {
+        sessionRows.first { $0.nativeID == nativeID && $0.system == .codex }?.title
+            ?? forkHistoryNodes.first { $0.nativeSessionID == nativeID }?.title
+            ?? "Title unavailable"
+    }
+
+    /// Navigation and checkbox selection only. Every lifecycle action still
+    /// requires a new preview and its own explicit confirmation.
+    func selectForkHistoryConversations(_ nativeIDs: Set<String>) {
+        resetSidebarSelection(to: .all)
+        selectedSystem = .codex
+        selectedFilter = .all
+        searchText = ""
+        selection = Set(sessionRows.filter { $0.system == .codex && nativeIDs.contains($0.nativeID) }.map(\.id))
+        isShowingSelectedSessionsOnly = !selection.isEmpty
+        focusedSessionID = selection.count == 1 ? selection.first : nil
+        rebuildSidebarMetrics()
     }
 
     var showsFilteredSelectionControls: Bool {
@@ -7818,6 +7847,9 @@ final class SessionManagerModel: ObservableObject {
     private func applyLiveSnapshot(
         _ coordinated: CoordinatedSessionSnapshot
     ) async throws {
+        forkHistoryNodes = coordinated.snapshot.archiveScopeNodes
+        forkHistoryComplete = coordinated.snapshot.archiveScopeComplete
+            && forkHistoryNodes.allSatisfy { $0.forkHistoryKnown == true }
         sessions = coordinated.reconciliation.entries.compactMap(\.liveSession)
         projectCatalog = await liveProvider.projects()
         var rows = coordinated.reconciliation.entries
@@ -8340,6 +8372,28 @@ final class SessionManagerModel: ObservableObject {
         presentGhostRepairBulkInventory()
     }
 
+    /// Keep results available for review until the user submits another Delete.
+    /// Only verified success may release the old workflow; unfinished and unknown
+    /// operations retain their identity and remain subject to the guard below.
+    private func releaseVerifiedCleanupBeforeNextDelete() {
+        guard !isGhostRepairBulkInventoryPresented,
+              !isGhostRepairBulkPreparationInFlight,
+              !isNativeDeleteDesktopCleanupRequestInFlight,
+              nativeDeleteDesktopCleanupStatusRequestID == nil else { return }
+        if let reportID = nativeDeleteDesktopCleanupContext?.canonicalDeleteReportID,
+           nativeDeleteDesktopCleanupVerified(reportID: reportID) {
+            // The already-clear path has no protected operation, but a concurrent
+            // recovery read must still finish before its handoff can be released.
+            guard nativeDeleteDesktopAbsenceVerifiedReportID != reportID
+                || ghostRepairBulkWorkflowMutationBlockedReason == nil else { return }
+            finishNativeDeleteReport(reportID: reportID)
+        } else if nativeDeleteDesktopCleanupContext == nil,
+                  case let .completed(_, report) = ghostRepairBulkProtectedOperation?.phase,
+                  report.outcome == .success {
+            _ = startNewGhostRepairBulkPreparation()
+        }
+    }
+
     @discardableResult
     func executeNativeDelete(
         _ preview: OperationPreview,
@@ -8350,6 +8404,7 @@ final class SessionManagerModel: ObservableObject {
                          message: "Wait for the current operation to finish. No additional Delete request was sent.",
                          canRetry: false)
         }
+        releaseVerifiedCleanupBeforeNextDelete()
         guard case .idle = nativeDeleteDesktopCleanupState,
               ghostRepairBulkWorkflowMutationBlockedReason == nil,
               !isGhostRepairBulkPreparationInFlight,

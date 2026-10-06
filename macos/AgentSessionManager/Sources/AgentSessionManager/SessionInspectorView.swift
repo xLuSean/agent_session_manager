@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SessionInspectorView: View {
     @EnvironmentObject private var model: SessionManagerModel
+    @State private var forkHistoryTarget: ForkHistoryTarget?
 
     var body: some View {
         Group {
@@ -55,6 +56,20 @@ struct SessionInspectorView: View {
                                 "Descendants",
                                 session.descendantCountKnown ? "\(session.descendantCount)" : "Unavailable"
                             )
+                        }
+
+                        detailSection("Fork history") {
+                            if let source = model.forkHistoryNodes.first(where: {
+                                $0.nativeSessionID == session.nativeID
+                            })?.forkedFromNativeSessionID {
+                                detailRow("Forked from", model.conversationTitle(for: source))
+                                detailRow("Source ID", source, monospaced: true)
+                            }
+                            Text("Find the source conversation and related forks, including archived conversations.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Button("Review Fork History…") {
+                                forkHistoryTarget = .init(id: session.nativeID, title: session.title)
+                            }
                         }
 
                         detailSection("Protection") {
@@ -171,6 +186,9 @@ struct SessionInspectorView: View {
             }
         }
         .navigationTitle("Inspector")
+        .sheet(item: $forkHistoryTarget) { target in
+            ForkHistorySheet(target: target).environmentObject(model)
+        }
     }
 
     private func conflictActionPanel(
@@ -283,6 +301,141 @@ struct SessionInspectorView: View {
         case .clear: .green
         case .unavailable: .secondary
         }
+    }
+}
+
+struct ForkHistoryTarget: Identifiable {
+    let id: String
+    let title: String
+}
+
+struct ForkHistorySheet: View {
+    @EnvironmentObject private var model: SessionManagerModel
+    @Environment(\.dismiss) private var dismiss
+    let target: ForkHistoryTarget
+    var onSelection: (() -> Void)? = nil
+    @State private var selectedIDs: Set<String> = []
+
+    private var dependentIDs: Set<String> { model.dependentForkHistoryIDs(for: target.id) }
+
+    private var orderedIDs: [String] {
+        [target.id] + dependentIDs.sorted()
+            + model.forkHistoryIDs(for: target.id).filter { $0 != target.id && !dependentIDs.contains($0) }
+    }
+
+    private func relationshipLabel(for id: String) -> String {
+        if id == target.id { return "Conversation you are reviewing" }
+        if dependentIDs.contains(id) { return "Fork of this conversation — may still reference its history" }
+        return "Other related history — not a dependent fork in this inventory"
+    }
+
+    private var availableIDs: Set<String> {
+        Set(model.sessionRows.filter {
+            $0.system == .codex && $0.nativeState != .absent && $0.nativeState != .unavailable
+                && $0.liveSession != nil
+        }.map(\.nativeID))
+    }
+
+    var body: some View {
+        let size = NativeDeletePreviewSheetLayout.size(
+            visibleScreenSize: (NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame.size
+                ?? CGSize(width: 1_280, height: 800))
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Fork History", systemImage: "arrow.triangle.branch")
+                .font(.title2.bold())
+            Text(target.title).font(.headline).textSelection(.enabled)
+            Text(target.id).font(.caption.monospaced()).textSelection(.enabled)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("How to delete this conversation").font(.headline)
+                        Text("1. Review the forks below. A fork you keep may still prevent deleting this source.")
+                        Text("2. Check the conversations you choose, then select Show Checked in Sessions. Move the ones outside Trash to Trash first.")
+                        Text("3. In Trash, select this conversation and those forks, then Delete Permanently. ASM deletes the selected forks first.")
+                    }
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("\(dependentIDs.count) forks to review before deleting this conversation")
+                            .font(.callout.weight(.semibold))
+                        Button("Check this conversation and its forks") {
+                            selectedIDs = dependentIDs.union([target.id]).intersection(availableIDs)
+                        }
+                        .disabled(dependentIDs.union([target.id]).intersection(availableIDs).isEmpty)
+                    }
+                    if !model.forkHistoryComplete {
+                        Label("The relationship inventory is incomplete. Missing rows do not prove there are no forks.",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if dependentIDs.isEmpty {
+                            Text("No dependent forks were returned. If Codex rejected deletion because of fork history, refresh this inventory. If the fork is still missing, the blocker remains unresolved; deleting a source or an unrelated conversation is not a substitute.")
+                                .font(.callout).foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        ForEach(orderedIDs, id: \.self) { id in
+                            let node = model.forkHistoryNodes.first { $0.nativeSessionID == id }
+                            HStack(alignment: .top) {
+                                Toggle("Select conversation", isOn: Binding(
+                                    get: { selectedIDs.contains(id) },
+                                    set: { if $0 { selectedIDs.insert(id) } else { selectedIDs.remove(id) } }
+                                ))
+                                .labelsHidden().toggleStyle(.checkbox)
+                                .disabled(!availableIDs.contains(id))
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(id == target.id ? target.title : model.conversationTitle(for: id))
+                                        .font(.headline).textSelection(.enabled)
+                                    Text(id).font(.caption.monospaced()).textSelection(.enabled)
+                                    Text(relationshipLabel(for: id))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    if let source = node?.forkedFromNativeSessionID {
+                                        Text("Forked from: \(model.conversationTitle(for: source))")
+                                            .font(.callout).textSelection(.enabled)
+                                        Text(source).font(.caption.monospaced()).textSelection(.enabled)
+                                    }
+                                    Text(model.sessionRows.first { $0.nativeID == id && $0.system == .codex }?.displayState.label
+                                         ?? node?.nativeState.rawValue.capitalized ?? "Not in the loaded inventory")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    if !availableIDs.contains(id) {
+                                        Text("This conversation is not available for selection in the loaded session list.")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .fixedSize(horizontal: false, vertical: true)
+                                Spacer()
+                                Button("Show in Sessions") {
+                                    reveal([id])
+                                }.disabled(!availableIDs.contains(id))
+                            }
+                            Divider()
+                        }
+                    }
+                    Text("These are relationships reported by Codex, not message contents or a complete historical transcript. If an expected fork is missing, refresh; a missing relationship does not override a Delete rejection.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            HStack {
+                Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Refresh Fork History") { Task { await model.reload() } }
+                    .disabled(model.isLoading || model.nativeDeleteSubmissionProgress != nil || model.ghostRepairCleanupState.isBusy)
+                Spacer()
+                Button("Show Checked in Sessions") { reveal(selectedIDs.intersection(availableIDs)) }
+                    .disabled(selectedIDs.intersection(availableIDs).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: size.width, height: min(680, size.height))
+    }
+
+    private func reveal(_ ids: Set<String>) {
+        model.selectForkHistoryConversations(ids)
+        onSelection?()
+        dismiss()
     }
 }
 

@@ -549,29 +549,35 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
         )
     }
 
-    func testCurrentV156RequestBoundPublisherVerifiesV34Exact148Publication()
-        async throws
-    {
+    func testCurrentV156RequestBoundPublisherVerifiesV34Exact148Publication() async throws {
+        try await verifyExtendedPublication(profile: .v156DesktopV34Extended, runtime: "0.156.1")
+    }
+
+    func testCurrentV160RequestBoundPublisherVerifiesExact148Publication() async throws {
+        try await verifyExtendedPublication(profile: .v160DesktopV34Async, runtime: "0.160.0")
+    }
+
+    private func verifyExtendedPublication(profile: CodexGhostRepairSnapshotSourceProfile, runtime: String) async throws {
         let exactTargets = (1...148).map {
             String(format: "00000000-0000-4000-8003-%012x", $0)
         }
         let fixture = try await makeFixture(
             label: #function,
             desktopUserVersion: 34,
-            sourceProfile: .v156DesktopV34Extended,
+            sourceProfile: profile,
             targets: exactTargets
         )
         let request = try makeSnapshotRequest(
-            runtimeVersion: "0.156.1",
+            runtimeVersion: runtime,
             targetThreadIDs: Array(exactTargets.prefix(2))
         )
         let selection = try CodexGhostRepairSnapshotRequestBoundProfileSelection(
             request: request
         )
-        XCTAssertEqual(selection.sourceProfile, .v156DesktopV34Extended)
+        XCTAssertEqual(selection.sourceProfile, profile)
         XCTAssertEqual(
             selection.expectedSchemaProfileIdentifier,
-            "desktop-v34-extended"
+            profile.databaseSchemaProfileIdentifier
         )
         let publisher = fixture.requestBoundPublisher(selection: selection)
 
@@ -1445,9 +1451,12 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
             capacityProbe: M2bCapacityProbe()
         )
         let binding = try await destination.bindPrepared()
-        if sourceProfile == .v156DesktopV34Extended {
+        if sourceProfile == .v156DesktopV34Extended || sourceProfile == .v160DesktopV34Async {
             try BulkShippingCompositionTestFixture.execute("ALTER TABLE local_thread_catalog ADD COLUMN trial_conversation_type TEXT; ALTER TABLE automations ADD COLUMN auto_archive INTEGER NOT NULL DEFAULT 0;", at: codexHome.appendingPathComponent("sqlite/codex-dev.db"))
             try BulkShippingCompositionTestFixture.execute("ALTER TABLE thread_items ADD COLUMN started_at_ms INTEGER; ALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;", at: codexHome.appendingPathComponent("thread_history_1.sqlite"))
+        }
+        if sourceProfile == .v160DesktopV34Async {
+            try BulkShippingCompositionTestFixture.execute("ALTER TABLE local_thread_catalog ADD COLUMN chatgpt_async_status INTEGER; ALTER TABLE automations ADD COLUMN next_run_nominal_at INTEGER;", at: codexHome.appendingPathComponent("sqlite/codex-dev.db"))
         }
         let defaultProfile: CodexGhostRepairSnapshotSourceProfile = switch desktopUserVersion {
         case 34: .v152DesktopV34

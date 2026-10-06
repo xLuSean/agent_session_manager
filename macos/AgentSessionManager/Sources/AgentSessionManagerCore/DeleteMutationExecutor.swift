@@ -423,7 +423,7 @@ actor DeleteMutationExecutor {
         observedState: NativeSessionState,
         completedAt: Date
     ) -> DeleteExecutionResult {
-        if case .rpcError? = acknowledgementError as? CodexAppServerError {
+        if case let .rpcError(_, reason)? = acknowledgementError as? CodexAppServerError {
             return DeleteExecutionResult(
                 previewID: preview.id,
                 managerKey: item.managerKey,
@@ -435,7 +435,7 @@ actor DeleteMutationExecutor {
                 errorCode: acknowledgementError.map {
                     errorCode(for: $0, prefix: "delete_request")
                 },
-                message: "App Server rejected Permanent Delete and official readback still returned the session."
+                message: "Codex rejected Permanent Delete: \(reason)\nOfficial readback confirmed this conversation still exists."
             )
         }
         return unknownResult(

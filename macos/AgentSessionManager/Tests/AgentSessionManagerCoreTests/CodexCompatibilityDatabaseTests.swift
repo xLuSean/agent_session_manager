@@ -324,6 +324,52 @@ final class CodexCompatibilityDatabaseTests: XCTestCase {
         XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
     }
 
+    func testAsyncLayoutRequiresBothExactColumnsAndPreservesOldRuntimePair() throws {
+        let file = try fixture(.desktop, profile: .desktopV34Extended)
+        XCTAssertEqual(try CodexGhostRepairInstalledSourceProfileReader.read(
+            exactRuntimeVersion: "0.157.1", databaseURL: file), .v156DesktopV34Extended)
+        try execute(file, "ALTER TABLE local_thread_catalog ADD COLUMN chatgpt_async_status INTEGER;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+        XCTAssertNil(try CodexGhostRepairInstalledSourceProfileReader.read(
+            exactRuntimeVersion: "0.157.1", databaseURL: file))
+        try execute(file, "ALTER TABLE automations ADD COLUMN next_run_nominal_at INTEGER;")
+        let metadata = try CodexCompatibilityDatabase.metadata(at: file)
+        XCTAssertNil(metadata.check?.issue)
+        XCTAssertEqual(metadata.desktopProfile, "desktop-v34-async")
+        XCTAssertEqual(try CodexGhostRepairInstalledSourceProfileReader.read(
+            exactRuntimeVersion: "0.157.1", databaseURL: file), .v160DesktopV34Async)
+        let history = try fixture(.threadHistory)
+        try execute(history, "ALTER TABLE thread_items ADD COLUMN started_at_ms INTEGER; ALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;")
+        let historyCheck = try XCTUnwrap(CodexCompatibilityDatabase.metadata(at: history).check)
+        for (desktop, checks, expected) in [
+            ("0.160.0", [metadata.check!, historyCheck], CodexCompatibilityStatus.supportedByBuild),
+            ("0.160.0", [metadata.check!], .needsBehaviorVerification),
+            ("0.158.0-alpha.2.1", [metadata.check!, historyCheck], .needsBehaviorVerification),
+            ("0.160.1", [metadata.check!, historyCheck], .needsBehaviorVerification),
+        ] {
+            let result = CodexCompatibilityEvaluator.results(version: "0.157.1", browsing: true,
+                archive: true, restore: true, delete: true, desktopVersion: desktop,
+                desktopSchemaProfile: metadata.desktopProfile, desktopMetadataAvailable: true,
+                desktopDatabaseChecks: checks)
+            XCTAssertEqual(result.last?.status, expected)
+        }
+        XCTAssertNil(try CodexGhostRepairInstalledSourceProfileReader.read(
+            exactRuntimeVersion: "0.156.1", databaseURL: file))
+        try execute(file, "ALTER TABLE automations ADD COLUMN unreviewed TEXT;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+    }
+
+    func testAsyncLayoutRejectsChangedColumnDefinition() throws {
+        let file = try fixture(.desktop, profile: .desktopV34Extended)
+        try execute(file, "ALTER TABLE local_thread_catalog ADD COLUMN chatgpt_async_status TEXT; ALTER TABLE automations ADD COLUMN next_run_nominal_at INTEGER;")
+        XCTAssertEqual(try CodexCompatibilityDatabase.metadata(at: file).check?.issue, .columns)
+    }
+
+    func testUnknownRuntimeStopsBeforeReadingInstalledProfileMetadata() throws {
+        XCTAssertNil(try CodexGhostRepairInstalledSourceProfileReader.read(
+            exactRuntimeVersion: "0.999.0", databaseURL: root.appendingPathComponent("missing.db")))
+    }
+
     func testExtendedLayoutDoesNotAcceptPartialAdditionsOrChangedDefinitions() throws {
         let file = try fixture(.desktop)
         try execute(file, "ALTER TABLE local_thread_catalog ADD COLUMN trial_conversation_type TEXT;")

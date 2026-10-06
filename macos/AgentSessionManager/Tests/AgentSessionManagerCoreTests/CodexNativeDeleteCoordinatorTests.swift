@@ -203,7 +203,7 @@ final class CodexNativeDeleteCoordinatorTests: XCTestCase {
                 observedAt: readbackAt,
                 runtimeVersion: runtime
             ),
-            deleteError: CodexAppServerError.rpcError(-32602, "not allowed")
+            deleteError: CodexAppServerError.rpcError(-32600, "cannot delete thread \(nativeID): forked history still references it")
         )
         let coordinator = makeCoordinator(store: store, transport: transport)
         let preview = try await coordinator.prepare(
@@ -218,6 +218,12 @@ final class CodexNativeDeleteCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(report.outcome, .failure)
+        let reportItem = try XCTUnwrap(report.items.first)
+        XCTAssertTrue(reportItem.message?.contains("forked history still references it") == true)
+        XCTAssertTrue(reportItem.deletionHasForkHistoryBlocker)
+        XCTAssertTrue(reportItem.deletionExplanation.contains("Move the forks you choose to Trash"))
+        let saved = try XCTUnwrap(store.operationReport(id: report.id)?.items.first)
+        XCTAssertEqual(saved.errorMessage, reportItem.message, "The original reason must remain available after reopening the report")
         XCTAssertEqual(try store.trashMemberships(for: .codex).count, 1)
         XCTAssertTrue(try store.deletedSessions(for: .codex).isEmpty)
         let counts = await transport.callCounts()

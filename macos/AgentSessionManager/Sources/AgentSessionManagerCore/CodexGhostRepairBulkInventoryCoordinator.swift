@@ -503,6 +503,7 @@ actor CodexGhostRepairBulkInventoryCandidateCoordinator:
 }
 
 protocol CodexGhostRepairBulkLiveCatalogReading: Sendable {
+    func selectProfile(runtimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile?
     func readExactCleanupScope(
         profile: CodexGhostRepairSnapshotSourceProfile,
         targetThreadIDs: [String]
@@ -514,6 +515,9 @@ protocol CodexGhostRepairBulkLiveCatalogReading: Sendable {
 }
 
 extension CodexGhostRepairBulkLiveCatalogReading {
+    func selectProfile(runtimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile? {
+        CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(exactRuntimeVersion: runtimeVersion)
+    }
     func readExactCleanupScope(
         profile: CodexGhostRepairSnapshotSourceProfile,
         targetThreadIDs: [String]
@@ -526,6 +530,9 @@ struct CodexGhostRepairBulkLiveCatalogReader:
     CodexGhostRepairBulkLiveCatalogReading,
     Sendable
 {
+    func selectProfile(runtimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile? {
+        try CodexGhostRepairInstalledSourceProfileReader.read(exactRuntimeVersion: runtimeVersion)
+    }
     private let workspaceFactory:
         CodexGhostRepairSnapshotAnalysisWorkspaceFactory
 
@@ -595,8 +602,7 @@ actor CodexGhostRepairBulkLiveScanCoordinator:
                 .validateOfficialInventory(observed)
             guard validated.active.union(validated.archived)
                     .isDisjoint(with: handoff.nativeSessionIDs),
-                  let profile = CodexGhostRepairSnapshotRequestBoundProfileSelection
-                    .selectProfile(exactRuntimeVersion: observed.runtimeVersion) else {
+                  let profile = try liveReader.selectProfile(runtimeVersion: observed.runtimeVersion) else {
                 return false
             }
             let readback = try liveReader.readExactCleanupScope(
@@ -666,8 +672,7 @@ actor CodexGhostRepairBulkLiveScanCoordinator:
         let validated:
             CodexGhostRepairBulkInventoryCandidateCoordinator
                 .ValidatedOfficialInventory
-        guard let profile = CodexGhostRepairSnapshotRequestBoundProfileSelection
-            .selectProfile(exactRuntimeVersion: observed.runtimeVersion) else {
+        guard let profile = try? liveReader.selectProfile(runtimeVersion: observed.runtimeVersion) else {
             return unavailable(request.requestID, stage: .snapshotProfile)
         }
         do {
@@ -961,6 +966,7 @@ struct CodexGhostRepairBulkPublishedSnapshotResumeResolver:
     private let snapshotReader:
         any CodexGhostRepairBulkSnapshotCatalogReading
     private let requiredSourceLayoutIdentifier: String
+    private let additionalSourceLayoutIdentifiers: Set<String>
 
     static func production(
         snapshotReader: any CodexGhostRepairBulkSnapshotCatalogReading
@@ -970,7 +976,8 @@ struct CodexGhostRepairBulkPublishedSnapshotResumeResolver:
             snapshotReader: snapshotReader,
             requiredSourceLayoutIdentifier:
                 CodexGhostRepairPackagedReadOnlyProfileCatalog
-                    .v156SourceLayoutIdentifier
+                    .v156SourceLayoutIdentifier,
+            additionalSourceLayoutIdentifiers: [CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier]
         )
     }
 
@@ -979,11 +986,13 @@ struct CodexGhostRepairBulkPublishedSnapshotResumeResolver:
         snapshotReader: any CodexGhostRepairBulkSnapshotCatalogReading,
         requiredSourceLayoutIdentifier: String =
             CodexGhostRepairPackagedReadOnlyProfileCatalog
-                .v1534SourceLayoutIdentifier
+                .v1534SourceLayoutIdentifier,
+        additionalSourceLayoutIdentifiers: Set<String> = []
     ) {
         self.reader = reader
         self.snapshotReader = snapshotReader
         self.requiredSourceLayoutIdentifier = requiredSourceLayoutIdentifier
+        self.additionalSourceLayoutIdentifiers = additionalSourceLayoutIdentifiers
     }
 
     func resolve(
@@ -1021,8 +1030,8 @@ struct CodexGhostRepairBulkPublishedSnapshotResumeResolver:
                     snapshotReference: reference
                   ),
                   snapshot.snapshotReference == reference,
-                  snapshot.sourceLayoutIdentifier
-                    == requiredSourceLayoutIdentifier,
+                  (snapshot.sourceLayoutIdentifier == requiredSourceLayoutIdentifier
+                    || additionalSourceLayoutIdentifiers.contains(snapshot.sourceLayoutIdentifier)),
                   snapshot.sourceFingerprintHash
                     == candidate.sourceFingerprintHash,
                   snapshot.manifestHash == published.manifestHash,

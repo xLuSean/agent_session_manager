@@ -169,6 +169,33 @@ final class CodexGhostRepairBulkInventoryCoordinatorTests: XCTestCase {
         assertAuthorityFree(coordinator.capabilities)
     }
 
+    func testSharedV157ProviderUsesSelectedDesktopProfileThroughoutScan() async throws {
+        for profile: CodexGhostRepairSnapshotSourceProfile in [.v156DesktopV34Extended, .v160DesktopV34Async] {
+            let recorder = Recorder()
+            let databases = CodexGhostRepairSnapshotAnalysisDatabase.allCases.map {
+                CodexGhostRepairSnapshotAnalysisDatabaseEvidence(database: $0,
+                    schemaVersion: CodexGhostRepairDatabaseSchemaProfile.desktopV34.databaseVersions[$0]!,
+                    integrityCheckPassed: true, foreignKeyViolationCount: 0,
+                    schemaProfileIdentifier: profile.databaseSchemaProfileIdentifier)
+            }
+            let coordinator = CodexGhostRepairBulkLiveScanCoordinator(
+                liveReader: LiveCatalogFake(readback: .init(databases: databases,
+                    targets: [target(eligibleA, rowContract: .categoryAEligible)],
+                    authority: .init(catalogRevision: 100, observationSequence: 200, watermarkUpdatedAt: 300,
+                                     metadataRowDigest: digest("c"), localSyncRowDigest: digest("d")),
+                    sourceFingerprintHash: digest("a")), selectedProfile: profile),
+                transport: TransportFake(recorder: recorder,
+                    inventoryValue: makeOfficialInventory(runtimeVersion: "0.157.1"),
+                    exactValues: [presentControl: .present(returnedThreadID: presentControl), eligibleA: exactAbsent(eligibleA)]),
+                absenceRegistry: .packagedReviewedV1())
+            guard case let .inventory(_, inventory) = await coordinator.observe(request: makeRequest()) else {
+                return XCTFail("Selected source profile must reach the scan")
+            }
+            XCTAssertEqual(inventory.eligibleThreadIDs, [eligibleA])
+            XCTAssertEqual(inventory.sourceLayoutIdentifier, profile.identifier)
+        }
+    }
+
     func testShippingLiveScanRequiresCanonicalAbsenceBeforeExactRead() async {
         let recorder = Recorder()
         let targets = [eligibleA, blockedB, unconfirmed, presentControl]
@@ -915,6 +942,11 @@ private struct ExactCleanupCatalogFake: CodexGhostRepairBulkLiveCatalogReading {
 
 private struct LiveCatalogFake: CodexGhostRepairBulkLiveCatalogReading {
     let readback: CodexGhostRepairBulkCatalogQueryReadback
+    var selectedProfile: CodexGhostRepairSnapshotSourceProfile? = nil
+
+    func selectProfile(runtimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile? {
+        selectedProfile ?? CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(exactRuntimeVersion: runtimeVersion)
+    }
 
     func readExactCleanupScope(
         profile: CodexGhostRepairSnapshotSourceProfile,
@@ -924,9 +956,10 @@ private struct LiveCatalogFake: CodexGhostRepairBulkLiveCatalogReading {
     }
 
     func read(
-        profile _: CodexGhostRepairSnapshotSourceProfile
+        profile: CodexGhostRepairSnapshotSourceProfile
     ) throws -> CodexGhostRepairBulkCatalogQueryReadback {
-        readback
+        if let selectedProfile { XCTAssertEqual(profile, selectedProfile) }
+        return readback
     }
 }
 

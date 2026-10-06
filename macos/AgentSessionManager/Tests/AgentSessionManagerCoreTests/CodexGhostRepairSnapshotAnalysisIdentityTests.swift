@@ -135,6 +135,24 @@ final class CodexGhostRepairSnapshotAnalysisIdentityTests: XCTestCase {
         XCTAssertEqual(reference, latestID.uuidString.lowercased())
     }
 
+    func testResumeResolverAdmitsAsyncSnapshotOnlyWithItsDistinctEvidence() async throws {
+        let source = CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier
+        for schema in ["desktop-v34-async", "desktop-v34-extended"] {
+            let resolver = CodexGhostRepairBulkPublishedSnapshotResumeResolver(
+                reader: AnalysisIdentityReaderFake(inventory: .init(snapshots: [
+                    recoveryEvidence(snapshotID: snapshotID, targets: targets, publishedAt: 2_000),
+                ], totalPublishedBytes: 130_000_000)),
+                snapshotReader: ResumeCatalogReaderFake(evidenceByReference: [
+                    snapshotID.uuidString.lowercased(): resumeSnapshotEvidence(snapshotID: snapshotID,
+                        targets: targets, sourceLayoutIdentifier: source, schemaProfileIdentifier: schema),
+                ]),
+                requiredSourceLayoutIdentifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v156SourceLayoutIdentifier,
+                additionalSourceLayoutIdentifiers: [source])
+            let reference = try await resolver.resolve(exactTargetThreadIDs: targets.sorted())
+            XCTAssertEqual(reference, schema == "desktop-v34-async" ? snapshotID.uuidString.lowercased() : nil)
+        }
+    }
+
     func testResumeResolverSkipsNewerOldProfileAndChoosesCurrentProfile()
         async throws
     {
@@ -318,7 +336,8 @@ final class CodexGhostRepairSnapshotAnalysisIdentityTests: XCTestCase {
         targets: [String],
         sourceLayoutIdentifier: String =
             CodexGhostRepairPackagedReadOnlyProfileCatalog
-                .v1534SourceLayoutIdentifier
+                .v1534SourceLayoutIdentifier,
+        schemaProfileIdentifier: String? = nil
     ) -> CodexGhostRepairBulkInventorySnapshotEvidence {
         let targetEvidence = targets.map { threadID in
             CodexGhostRepairSnapshotAnalysisTargetEvidence(
@@ -346,7 +365,8 @@ final class CodexGhostRepairSnapshotAnalysisIdentityTests: XCTestCase {
                 database: $0.0,
                 schemaVersion: $0.1,
                 integrityCheckPassed: true,
-                foreignKeyViolationCount: 0
+                foreignKeyViolationCount: 0,
+                schemaProfileIdentifier: schemaProfileIdentifier
             )
         }
         return .init(

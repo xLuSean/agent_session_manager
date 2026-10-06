@@ -6,6 +6,126 @@ final class CodexNativeBatchCoordinatorTests: XCTestCase {
     private let runtime = "0.147.0"
     private let baseTime = Date(timeIntervalSince1970: 1_800_700_000)
 
+    func testDeleteContinuesAfterVerifiedForkRejectionAndPersistsIndependentSuccesses() async throws {
+        let items = (1...3).map { session($0, state: .archived) }
+        let initial = snapshot(items, at: baseTime)
+        let transport = NativeBatchTransportStub(inventories: [
+            snapshot(items, at: baseTime.addingTimeInterval(1)),
+            snapshot(items, at: baseTime.addingTimeInterval(20)),
+            snapshot([items[0], items[2]], at: baseTime.addingTimeInterval(30)),
+            snapshot([items[0]], at: baseTime.addingTimeInterval(40)),
+        ], rejectedDeleteIDs: [items[0].nativeID])
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try seedTrash(items, snapshot: initial, store: store)
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepare(managerKeys: Set(items.map(\.id)), operation: .emptyTrash,
+                                                    snapshot: initial, checkpoint: initial.checkpoint)
+        let report = try await coordinator.execute(preview: preview, confirmationToken: preview.confirmationToken)
+        XCTAssertEqual(report.outcome, .partial)
+        XCTAssertEqual(report.items.map(\.outcome), [.failure, .success, .success])
+        XCTAssertTrue(report.items[0].message?.contains("forked history") == true)
+        XCTAssertEqual(try store.trashMemberships(for: .codex).map(\.managerKey), [items[0].id])
+        XCTAssertEqual(Set(try store.deletedSessions(for: .codex).map(\.managerKey)), Set(items.dropFirst().map(\.id)))
+        do { _ = try await coordinator.execute(preview: preview, confirmationToken: preview.confirmationToken); XCTFail("Consumed preview must not replay") }
+        catch {}
+        let calls = await transport.calls()
+        XCTAssertEqual(calls.delete, items.map(\.nativeID))
+    }
+
+    func testDeleteSkipsOnlyTheItemWhoseProtectionChanged() async throws {
+        let items = (1...2).map { session($0, state: .archived) }
+        var pinned = items[0]
+        pinned.protection.isPinned = true
+        let initial = snapshot(items, at: baseTime)
+        let transport = NativeBatchTransportStub(inventories: [
+            snapshot([pinned, items[1]], at: baseTime.addingTimeInterval(1)),
+            snapshot([pinned], at: baseTime.addingTimeInterval(20)),
+        ])
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try seedTrash(items, snapshot: initial, store: store)
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepare(managerKeys: Set(items.map(\.id)), operation: .emptyTrash,
+                                                    snapshot: initial, checkpoint: initial.checkpoint)
+        let report = try await coordinator.execute(preview: preview, confirmationToken: preview.confirmationToken)
+        XCTAssertEqual(report.items.map(\.outcome), [.failure, .success])
+        XCTAssertEqual(report.items[0].errorCode, "delete_item_preflight_rejected")
+        let calls = await transport.calls()
+        XCTAssertEqual(calls.delete, [items[1].nativeID])
+    }
+
+    func testDeleteOrdersSelectedForkBeforeSourceAndNeverAddsUnselectedFork() async throws {
+        let items = (1...3).map { session($0, state: .archived) }
+        let nodes = items.map { item in
+            ArchiveScopeNode(managerKey: item.id, nativeSessionID: item.nativeID,
+                             forkedFromNativeSessionID: item.nativeID == items[0].nativeID ? nil : items[0].nativeID,
+                             title: item.title, nativeState: .archived, protection: item.protection)
+        }
+        let initial = snapshot(items, at: baseTime, forkNodes: nodes)
+        let transport = NativeBatchTransportStub(inventories: [
+            snapshot(items, at: baseTime.addingTimeInterval(1), forkNodes: nodes),
+            snapshot([items[0], items[2]], at: baseTime.addingTimeInterval(20)),
+            snapshot([items[0], items[2]], at: baseTime.addingTimeInterval(30)),
+        ], rejectedDeleteIDs: [items[0].nativeID])
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try seedTrash(items, snapshot: initial, store: store)
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepare(managerKeys: Set(items.prefix(2).map(\.id)), operation: .emptyTrash,
+                                                    snapshot: initial, checkpoint: initial.checkpoint)
+        let report = try await coordinator.execute(preview: preview, confirmationToken: preview.confirmationToken)
+        XCTAssertEqual(report.items.map(\.nativeSessionID), items.prefix(2).map(\.nativeID))
+        XCTAssertEqual(report.items.map(\.outcome), [.failure, .success])
+        let calls = await transport.calls()
+        XCTAssertEqual(calls.delete, [items[1].nativeID, items[0].nativeID])
+        XCTAssertEqual(Set(try store.trashMemberships(for: .codex).map(\.managerKey)), [items[0].id, items[2].id])
+    }
+
+    func testUnknownDeleteStopsWithoutCallingRemainingSelections() async throws {
+        let items = (1...2).map { session($0, state: .archived) }
+        let initial = snapshot(items, at: baseTime)
+        let transport = NativeBatchTransportStub(inventories: [
+            snapshot(items, at: baseTime.addingTimeInterval(1)),
+            snapshot([items[1]], at: baseTime.addingTimeInterval(20)),
+        ], exactObservation: .unavailable(observedAt: baseTime.addingTimeInterval(20), errorCode: "fixture", message: "Lost readback"))
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try seedTrash(items, snapshot: initial, store: store)
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepare(managerKeys: Set(items.map(\.id)), operation: .emptyTrash,
+                                                    snapshot: initial, checkpoint: initial.checkpoint)
+        let report = try await coordinator.execute(preview: preview, confirmationToken: preview.confirmationToken)
+        XCTAssertEqual(report.items[0].outcome, .unknown)
+        XCTAssertEqual(report.items[1].errorCode, "batch_not_attempted")
+        let calls = await transport.calls()
+        XCTAssertEqual(calls.delete, [items[0].nativeID])
+        XCTAssertTrue(try store.deletedSessions(for: .codex).isEmpty)
+    }
+
+    func testConflictingDeleteReadbacksAreUnknownAndDoNotContinue() async throws {
+        let items = (1...2).map { session($0, state: .archived) }
+        let initial = snapshot(items, at: baseTime)
+        // Inventory says present, while the independent exact read says absent.
+        let transport = NativeBatchTransportStub(inventories: [
+            snapshot(items, at: baseTime.addingTimeInterval(1)),
+            snapshot(items, at: baseTime.addingTimeInterval(20)),
+        ])
+        let store = try makeStore(named: #function)
+        defer { store.close() }
+        try seedTrash(items, snapshot: initial, store: store)
+        let coordinator = makeCoordinator(store: store, transport: transport)
+        let preview = try await coordinator.prepare(managerKeys: Set(items.map(\.id)), operation: .emptyTrash,
+                                                    snapshot: initial, checkpoint: initial.checkpoint)
+        let report = try await coordinator.execute(preview: preview, confirmationToken: preview.confirmationToken)
+        XCTAssertEqual(report.items[0].outcome, .unknown)
+        XCTAssertEqual(report.items[0].errorCode, "delete_batch_readback_inconsistent")
+        XCTAssertEqual(report.items[1].errorCode, "batch_not_attempted")
+        let calls = await transport.calls()
+        XCTAssertEqual(calls.delete, [items[0].nativeID])
+        XCTAssertEqual(try store.trashMemberships(for: .codex).count, 2)
+    }
+
     func testArchiveBatchStopsAfterFailureAndNeverSendsRemainingRequest() async throws {
         let sessions = (1 ... 3).map { session($0, state: .active) }
         let checkpointSnapshot = snapshot(sessions, at: baseTime)
@@ -753,7 +873,8 @@ final class CodexNativeBatchCoordinatorTests: XCTestCase {
         protectionComplete: Bool = true,
         inventoryComplete: Bool = true,
         runtimeVersion: String? = nil,
-        binding: CodexCompatibilityBinding? = nil
+        binding: CodexCompatibilityBinding? = nil,
+        forkNodes: [ArchiveScopeNode] = []
     ) -> ProviderInventorySnapshot {
         ProviderInventorySnapshot(
             provider: .codex,
@@ -764,6 +885,7 @@ final class CodexNativeBatchCoordinatorTests: XCTestCase {
             inventoryComplete: inventoryComplete,
             protectionComplete: protectionComplete,
             sessions: sessions,
+            archiveScopeNodes: forkNodes,
             archiveScopeComplete: true
         )
     }
@@ -808,19 +930,22 @@ private actor NativeBatchTransportStub: CodexNativeBatchMutationTransport {
     private let exactObservation: DeleteExactReadObservation?
     private let exactRuntime: String?
     private let exactTime: Date?
+    private let rejectedDeleteIDs: Set<String>
 
     init(
         inventories: [ProviderInventorySnapshot],
         archiveFailureOrdinal: Int? = nil,
         exactObservation: DeleteExactReadObservation? = nil,
         exactRuntime: String? = nil,
-        exactTime: Date? = nil
+        exactTime: Date? = nil,
+        rejectedDeleteIDs: Set<String> = []
     ) {
         self.inventories = inventories
         self.archiveFailureOrdinal = archiveFailureOrdinal
         self.exactObservation = exactObservation
         self.exactRuntime = exactRuntime
         self.exactTime = exactTime
+        self.rejectedDeleteIDs = rejectedDeleteIDs
     }
 
     func inventorySnapshot() async throws -> ProviderInventorySnapshot {
@@ -875,6 +1000,9 @@ private actor NativeBatchTransportStub: CodexNativeBatchMutationTransport {
 
     func delete(_ nativeSessionID: String) async throws {
         log.delete.append(nativeSessionID)
+        if rejectedDeleteIDs.contains(nativeSessionID) {
+            throw CodexAppServerError.rpcError(-32600, "cannot delete thread \(nativeSessionID): forked history still references it")
+        }
     }
 
     func exactDeleteRead(
@@ -883,6 +1011,9 @@ private actor NativeBatchTransportStub: CodexNativeBatchMutationTransport {
     ) async -> DeleteExactReadObservation {
         log.exactRead.append(nativeSessionID)
         if let exactObservation { return exactObservation }
+        if rejectedDeleteIDs.contains(nativeSessionID) {
+            return .present(nativeSessionID: nativeSessionID, observedAt: exactTime ?? Date(timeIntervalSince1970: 1_800_700_100), runtimeVersion: exactRuntime ?? auditedRuntimeVersion)
+        }
         return .absent(
             nativeSessionID: nativeSessionID,
             observedAt: exactTime ?? Date(timeIntervalSince1970: 1_800_700_100),

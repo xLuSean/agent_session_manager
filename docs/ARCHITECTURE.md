@@ -49,7 +49,9 @@ Reconciliation 是純判斷，再以 manager transaction 保存 checkpoint／結
 
 Archive／Restore 各自要求 Archived／Active 回讀。Move to Trash 保存延後的 add 意圖；Trash Restore 保存 remove 意圖；只有原生成功才在 Report transaction 修改 membership。Reapply Trash 另綁完整 membership-set hash，成功也不增減原意圖。
 
-一般 checkbox batch 凍結同一組完整 ID，先全批檢查，再依固定順序逐筆官方 request；遇第一個 failure／unknown 停止，其餘標 notAttempted。這與 Ghost 的單一資料庫交易不同，不能宣稱官方多個 request 跨項目原子化。含子對話的 affected-set 模型與 tables 不代表正式 executor 已放行，未支援範圍仍拒絕。
+一般 checkbox batch 凍結同一組完整 ID，先全批檢查，再逐筆官方 request。Delete 依官方 `forkedFromId` 讓已選 fork 先於來源，其他項目按固定 ID 順序；單筆 preflight 不符只略過該筆，雙重讀回確認仍存在的刪除失敗繼續其他選取項目。共同檢查失敗、讀回矛盾或 unknown 仍停止；Archive／Restore 保留第一個 failure／unknown 後停止。未送出的項目在 UI 與實際失敗分開計數。這與 Ghost 的單一資料庫交易不同，不能宣稱多個 RPC 跨項目原子化。含子代理的 affected-set 模型與 tables 不代表正式 executor 已放行，未支援範圍仍拒絕。
+
+全來源清單的 fork 來源識別保存在既有 scope node 中，與子代理父子關係分開，也納入 inventory hash。Inspector 及刪除結果可讀取關聯標題、ID 與狀態，並將明確勾選且目前可見的對話帶回主清單。這個入口只改導覽與 checkbox 選取，所有 lifecycle 操作仍經新的 Preview 與確認。
 
 批次每筆操作後使用 lifecycle-only readback：新的 App Server 連線、完整分頁的 Active／Archive 清單，保留截斷與重複游標檢查；Delete 另需精確 ID 不存在證據。不重讀專案、信任設定、全來源子對話圖。這些保護資料明確標為 unavailable，不得用此回讀授權新操作；全批 preflight 和 recovery 仍使用完整 inventory。
 

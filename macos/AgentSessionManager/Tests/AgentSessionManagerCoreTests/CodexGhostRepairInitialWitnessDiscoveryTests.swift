@@ -311,6 +311,17 @@ final class CodexGhostRepairInitialWitnessDiscoveryTests: XCTestCase {
         XCTAssertEqual(selection.sourceProfile, .v1534DesktopV34)
     }
 
+    func testSharedProviderWitnessKeepsItsExactDesktopProfile() throws {
+        let ids = [id(1)]
+        for profile: CodexGhostRepairSnapshotSourceProfile in [.v156DesktopV34Extended, .v160DesktopV34Async] {
+            let request = try CodexGhostRepairSnapshotActionRequest(
+                review: makeReview(ids: ids, runtimeVersion: "0.157.1"),
+                initialWitnessEvidence: .init(threadIDs: ids, runtimeVersion: "0.157.1",
+                    sourceLayoutIdentifier: profile.identifier, sourceFingerprintHash: fingerprint))
+            XCTAssertEqual(try CodexGhostRepairSnapshotRequestBoundProfileSelection(request: request).sourceProfile, profile)
+        }
+    }
+
     func testInitialWitnessEvidenceDriftCannotCreateSnapshotRequest() {
         let ids = [id(1)]
         let review = makeReview(ids: ids)
@@ -408,7 +419,7 @@ final class CodexGhostRepairInitialWitnessDiscoveryTests: XCTestCase {
     }
 
     private func makeReview(
-        ids: [String]
+        ids: [String], runtimeVersion: String = "0.153.4"
     ) -> CodexGhostRepairReadOnlyReview {
         let evidence = ids.map {
             CodexGhostRepairSnapshotProtectionEvidence(
@@ -422,7 +433,7 @@ final class CodexGhostRepairInitialWitnessDiscoveryTests: XCTestCase {
         }
         return CodexGhostRepairReadOnlyReview(
             targetThreadIDs: ids,
-            runtimeVersion: "0.153.4",
+            runtimeVersion: runtimeVersion,
             inventoryHash: "inventory-hash",
             observedAt: Date(timeIntervalSince1970: 1),
             protectionEvidence: [],

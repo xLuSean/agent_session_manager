@@ -115,7 +115,21 @@ ASM 的檢查規則更新也會讓舊結果失效。本次規則版本升至 4�
 
 刪除受阻時，原因會保留在預覽視窗內，文字可以選取複製。若 ASM 確認預覽尚未執行且未過期，排除問題後可按 **Check Again and Delete**，重新檢查後才執行；不會自動重試。若提示上一筆 Desktop 清理需要處理，按 **Review Previous Cleanup** 查看原清理狀態，單純關閉 Codex 不會解除這種阻擋。狀態不明或預覽已過期時，先關閉預覽並查看操作紀錄，不要盲目重送刪除。
 
+上一批顯示 **Cleanup is complete** 後，按 **Close** 關閉結果即可重新選取下一批，不必重開 ASM 或執行 Plan Closure。確認下一批刪除時，ASM 會釋放已驗證成功的舊操作狀態，再檢查新預覽；不重送上一批刪除或清理。尚未完成、失敗或結果不明的清理仍會阻擋下一批，原操作紀錄保持不變。
+
 若整批部分失敗，保留逐筆結果；未執行、不明與失敗不能當作已刪除。Conflict 的接受原生狀態、重套 Trash 或確認外部刪除各有不同作用，必須依預覽說明，不以清單漏項直接確認刪除。
+
+### 刪除失敗與 Fork History
+
+Delete 中某筆被拒絕，且清單與精確讀回都確認它仍存在時，ASM 會保留該筆並繼續其他已選對話；不重送失敗項目。單筆狀態或保護條件變更會略過該筆，共同環境檢查失敗或結果不明仍會停止。結果頁分開列 **Failed**、**Not attempted** 與 **Unknown**，問題說明包含完整標題與 ID；舊報告的 `batch_not_attempted` 也不再算成實際刪除失敗。
+
+若出現 **forked history still references it**，表示其他 fork 仍引用這個來源對話的歷史，不代表再刪一次就能解決。刪除預覽的 **Fork history for this selection** 會顯示來源及選取範圍外的關聯筆數；也可從結果中該對話的 **Review Fork History…**，或主清單右側 Inspector 的 **Fork history** 開啟關聯檢視，查看來源、相關 fork、標題、完整 ID 與目前狀態。這使用 Codex 的 `forkedFromId`，與子代理父子關係分開；沒有列出的關係不代表一定不存在，必要時按 **Refresh Fork History**。
+
+結果頁會先列出需要處理的對話，完整標題、ID、原因及 **Review Fork History…** 放在同一張可換行的卡片中，不需要橫向捲動或靠滑鼠提示閱讀。單筆刪除也會保存 Codex 原始拒絕原因；舊版已省略的原因不會憑空補回。
+
+Fork History 會將由這筆對話分出的後續 fork 排在前面，與較早來源、同源分支等其他關係區分。這些是待檢視的分支，不表示每筆目前都引用相同歷史片段；仍引用來源的 fork 才會阻擋來源刪除。ASM 以官方逐筆 metadata 查詢補齊清單可能省略的 fork 關係，不讀取對話訊息；補讀失敗或達到上限時顯示關係不完整。
+
+可按 **Check this conversation and its forks** 勾選目前可選的來源與後續分支，檢查標題後按 **Show Checked in Sessions** 回主清單，只顯示這些選取項目；也可自行勾選或按單列 **Show in Sessions** 定位。先把尚未在 Trash、且確定要刪除的對話移入 Trash（不同狀態可分組移入），再到 Trash 勾選來源與那些 fork，建立並確認新的 Delete 預覽；同批選取的 fork 會先於來源刪除。勾選與導覽不會送出刪除，其他關聯歷史不會自動加入。若 Codex 回報 fork 引用，清單卻沒有 fork，按 **Refresh Fork History**；仍找不到時表示關聯尚未查明，保留來源，不反覆重試或刪除不相關對話。若希望保留的 fork 仍引用來源，來源也需要保留。
 
 ## 掃描既有 Ghost
 

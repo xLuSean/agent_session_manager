@@ -104,8 +104,8 @@ Clear Selected Records 或 Clear All List Records 可移除選取或全部清單
 Exact selection → Frozen Preview → Confirm → Execute once → Fresh readback → Itemized Report
 ```
 
-- Preview 後 inventory 或 protection evidence 漂移，整批 fail closed。
-- Provider 回傳 failure 或 unknown 時停止 batch；不會縮小選取範圍後偷偷繼續，也不會自動重送。
+- Preview 後重新檢查每筆選取項目；共同環境檢查失敗會阻擋整批，Delete 的單筆狀態或保護條件變更則略過該筆，並記錄為未執行。
+- Delete 經兩項官方讀回確認失敗後，繼續其他已選項目；結果不明時停止後續請求。Archive 與 Restore 遇失敗也會停止，所有操作都不會自動重送。
 - 可逆操作只需要 review Preview 並按下 Confirm。
 - Permanent Delete、清除 Report History 要求輸入 exact confirmation token；Ghost清除使用一次按鈕確認，由App綁定該批內部憑證。
 - Delete 只接受 Trash Bin 中的 session；只有 **Deletion and Desktop cleanup verified** 代表兩段都已驗證。

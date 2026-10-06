@@ -20,9 +20,11 @@ struct CodexGhostRepairSnapshotRequestBoundProfileSelection:
     var repairMutationAuthority: Bool { false }
 
     init(request: CodexGhostRepairSnapshotActionRequest) throws {
-        guard let selected = Self.selectProfile(
-            exactRuntimeVersion: request.runtimeVersion
-        ) else {
+        let witnessed = request.initialWitnessEvidence.flatMap {
+            CodexGhostRepairSnapshotSourceProfile.admitted(sourceLayoutIdentifier: $0.sourceLayoutIdentifier)
+        }
+        guard let selected = witnessed ?? Self.selectProfile(exactRuntimeVersion: request.runtimeVersion),
+              selected.supports(runtimeVersion: request.runtimeVersion) else {
             throw CodexGhostRepairError.invalidProtectionEvidence(
                 "Snapshot request runtime is outside the exact packaged profile selection."
             )
@@ -41,9 +43,20 @@ struct CodexGhostRepairSnapshotRequestBoundProfileSelection:
     }
 
     static func selectProfile(
-        exactRuntimeVersion runtimeVersion: String
+        exactRuntimeVersion runtimeVersion: String,
+        desktopSchemaProfileIdentifier: String? = nil
     ) -> CodexGhostRepairSnapshotSourceProfile? {
-        switch runtimeVersion.trimmingCharacters(
+        if let desktopSchemaProfileIdentifier {
+            let candidates: [CodexGhostRepairSnapshotSourceProfile] = [
+                .v149DesktopV32, .v151DesktopV33, .v152DesktopV34, .v153DesktopV34,
+                .v1534DesktopV34, .v156DesktopV34Extended, .v160DesktopV34Async,
+            ]
+            return candidates.first {
+                $0.supports(runtimeVersion: runtimeVersion)
+                    && $0.databaseSchemaProfileIdentifier == desktopSchemaProfileIdentifier
+            }
+        }
+        return switch runtimeVersion.trimmingCharacters(
             in: .whitespacesAndNewlines
         ) {
         case "0.149.0", "codex-cli 0.149.0":
@@ -59,10 +72,13 @@ struct CodexGhostRepairSnapshotRequestBoundProfileSelection:
             .v156DesktopV34Extended
         case "0.153.4", "codex-cli 0.153.4":
             .v1534DesktopV34
+        case "0.160.0", "codex-cli 0.160.0":
+            .v160DesktopV34Async
         default:
             nil
         }
     }
+
 }
 
 /// Per-request publisher. It cannot select a raw profile string or path, and

@@ -83,6 +83,8 @@ Core 測試通過不代表 SwiftUI 已連入 Xcode target。修改 App 或共用
 
 ### 新版 Desktop 正式清理契約
 
+CLI `0.157.1`／Desktop bundled `0.160.0` 使用獨立的 `desktop-v34-async` 契約，增加 nullable INTEGER 欄位 `local_thread_catalog.chatgpt_async_status` 與 `automations.next_run_nominal_at`。同版 CLI 仍可搭配原先的 extended v34 Desktop；正式掃描先以完整結構選定來源，再由快照、備份及交易內檢查重新驗證。舊版證據不能借用到新版，未知欄位、不同型別或部分升級仍停止。
+
 CLI `0.156.1`、`0.157.1`／Desktop bundled `0.158.0-alpha.2.1` 使用獨立的 extended v34 契約。雖然 `user_version` 仍為 34，快照證據會另外保存完整結構識別；必須同時符合新增 catalog／automation 欄位及 timed history，不能借用舊版 v34 證據。正式清理在備份後及交易內再次檢查完整新版結構、trigger 與 foreign key，欄位變動即停止。
 
 新版本准入的依據包含隔離的實際 runtime 缺席回應、148 筆正式清理交易、備份綁定、回滾及冷讀報告測試。這是本機候選支援；真實 Desktop 重開後是否仍保持清理結果，另記錄實機驗收，不由 SQL self-test 自動宣告。

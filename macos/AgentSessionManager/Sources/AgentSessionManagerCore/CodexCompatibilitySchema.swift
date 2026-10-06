@@ -61,7 +61,7 @@ struct CodexCompatibilitySchema {
               (properties["status"]?["allOf"] as? [[String: String]])?.first?["$ref"] == "#/definitions/ThreadStatus",
               (properties["cwd"]?["allOf"] as? [[String: String]])?.first?["$ref"] == "#/definitions/AbsolutePathBuf",
               let statuses = definitions["ThreadStatus"]?["oneOf"] as? [[String: Any]], !statuses.isEmpty else { return false }
-        for key in ["parentThreadId", "name"] where properties[key] != nil {
+        for key in ["parentThreadId", "forkedFromId", "name"] where properties[key] != nil {
             guard Set(properties[key]?["type"] as? [String] ?? []) == ["string", "null"] else { return false }
         }
         return statuses.allSatisfy {
@@ -162,5 +162,23 @@ enum CodexCompatibilityDatabase {
         check?.schemaProfileIdentifier = inspection?.profile
         let profileID = inspection?.profile
         return .init(fingerprint: fingerprint, userVersion: version, desktopProfile: profileID, check: check)
+    }
+}
+
+/// Metadata selects a candidate only. The coherent capture and transaction
+/// independently recheck the full contract before reading or changing rows.
+/// Keep filesystem access outside the pure request/profile binding.
+enum CodexGhostRepairInstalledSourceProfileReader {
+    static func read(exactRuntimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile? {
+        let database = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sqlite/codex-dev.db")
+        return try read(exactRuntimeVersion: exactRuntimeVersion, databaseURL: database)
+    }
+
+    static func read(exactRuntimeVersion: String, databaseURL: URL) throws -> CodexGhostRepairSnapshotSourceProfile? {
+        guard CodexGhostRepairPackagedReadOnlyProfileCatalog.supportsObservationRuntime(exactRuntimeVersion) else { return nil }
+        guard let schema = try CodexCompatibilityDatabase.metadata(at: databaseURL).desktopProfile else { return nil }
+        return CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(
+            exactRuntimeVersion: exactRuntimeVersion, desktopSchemaProfileIdentifier: schema)
     }
 }

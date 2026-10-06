@@ -114,15 +114,25 @@ public struct CodexGhostRepairInitialWitnessUnavailableDiscovery:
 }
 
 protocol CodexGhostRepairInitialWitnessCatalogReading: Sendable {
+    func selectProfile(runtimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile?
     func read(
         profile: CodexGhostRepairSnapshotSourceProfile
     ) throws -> CodexGhostRepairInitialWitnessCatalogReadback
+}
+
+extension CodexGhostRepairInitialWitnessCatalogReading {
+    func selectProfile(runtimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile? {
+        CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(exactRuntimeVersion: runtimeVersion)
+    }
 }
 
 struct CodexGhostRepairInitialWitnessCanonicalCatalogReader:
     CodexGhostRepairInitialWitnessCatalogReading,
     Sendable
 {
+    func selectProfile(runtimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile? {
+        try CodexGhostRepairInstalledSourceProfileReader.read(exactRuntimeVersion: runtimeVersion)
+    }
     private let workspaceFactory:
         CodexGhostRepairSnapshotAnalysisWorkspaceFactory
 
@@ -185,11 +195,7 @@ actor CodexGhostRepairInitialWitnessDiscoveryCoordinator:
         let profile: CodexGhostRepairSnapshotSourceProfile
         do {
             validated = try Self.validateOfficialProtection(official)
-            guard let selected =
-                CodexGhostRepairSnapshotRequestBoundProfileSelection
-                    .selectProfile(
-                        exactRuntimeVersion: official.runtimeVersion
-                    )
+            guard let selected = try catalogReader.selectProfile(runtimeVersion: official.runtimeVersion)
             else {
                 return unavailable()
             }

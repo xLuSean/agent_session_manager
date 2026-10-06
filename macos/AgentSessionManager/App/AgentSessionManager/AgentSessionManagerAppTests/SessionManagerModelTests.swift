@@ -1,5 +1,6 @@
 @testable import AgentSessionManagerCore
 import XCTest
+import SwiftUI
 
 @MainActor
 final class SessionManagerModelTests: XCTestCase {
@@ -310,6 +311,78 @@ final class SessionManagerModelTests: XCTestCase {
         }
     }
 
+    func testDeleteReportSeparatesNotAttemptedAndExplainsForkRejection() {
+        func item(_ id: String, _ code: String, _ message: String) -> NativeDeleteReportItem {
+            .init(managerKey: "codex:\(id)", nativeSessionID: id, title: "Title \(id)",
+                  projectName: nil, workingDirectory: nil, outcome: .failure,
+                  observedNativeState: .archived, errorCode: code, message: message)
+        }
+        let report = NativeDeleteReport(id: UUID(), previewID: UUID(), outcome: .failure,
+            completedAt: Date(), items: [
+                item("source", "delete_batch_target_present", "forked history still references it"),
+                item("other", "batch_not_attempted", "Old stopped batch"),
+                item("pinned", "delete_item_preflight_rejected", "Changed protection"),
+            ], recoveredAfterInterruption: false)
+        XCTAssertEqual(report.failureCount, 1)
+        XCTAssertEqual(report.notAttemptedCount, 2)
+        XCTAssertEqual(report.items[1].deletionResultLabel, "Not attempted")
+        XCTAssertTrue(report.items[0].deletionExplanation.contains("Review Fork History"))
+        XCTAssertEqual(report.items[0].title, "Title source")
+    }
+
+    func testForkHistoryNavigationFindsTitlesAndSelectsOnlyExplicitLoadedRows() {
+        let model = makeModel(sessions: [])
+        let source = AgentSession(system: .codex, nativeID: "source", title: "Original history",
+                                  workingDirectory: "/project", updatedAt: Date(), sizeBytes: nil, nativeState: .archived)
+        let fork = AgentSession(system: .codex, nativeID: "fork", title: "Related fork",
+                                workingDirectory: "/different-project", updatedAt: Date(), sizeBytes: nil, nativeState: .active)
+        model.sessions = [source, fork]
+        model.sessionRows = [source, fork].map(SessionPresentation.init(session:))
+        model.forkHistoryNodes = [
+            .init(managerKey: source.id, nativeSessionID: source.nativeID, title: source.title,
+                  nativeState: .archived, protection: .init()),
+            .init(managerKey: fork.id, nativeSessionID: fork.nativeID, forkedFromNativeSessionID: source.nativeID,
+                  title: fork.title, nativeState: .active, protection: .init()),
+        ]
+        model.selectProject("unrelated")
+        model.searchText = "not visible"
+        XCTAssertEqual(Set(model.forkHistoryIDs(for: "source")), ["source", "fork"])
+        XCTAssertEqual(model.dependentForkHistoryIDs(for: "source"), ["fork"])
+        XCTAssertTrue(model.dependentForkHistoryIDs(for: "fork").isEmpty)
+        XCTAssertEqual(model.conversationTitle(for: "source"), "Original history")
+        model.selectForkHistoryConversations(["source", "fork", "missing"])
+        XCTAssertEqual(model.selection, [source.id, fork.id])
+        XCTAssertEqual(Set(model.filteredSessions.map(\.id)), [source.id, fork.id])
+        XCTAssertNil(model.pendingNativeDeletePreview, "Finding relationships is not Delete consent")
+        XCTAssertNil(model.pendingNativeArchivePreview)
+    }
+
+    func testDeleteResultCardWrapsLongReasonsAtNarrowWidths() throws {
+        let item = NativeDeleteReportItem(
+            managerKey: "codex:fixture", nativeSessionID: "01900000-0000-7000-8000-000000000001",
+            title: "A long conversation title that must remain readable when reviewing a deletion failure",
+            projectName: nil, workingDirectory: nil, outcome: .failure, observedNativeState: .archived,
+            errorCode: "delete_request_rpc_-32600",
+            message: "cannot delete thread: forked history still references it")
+        var heights: [CGFloat] = []
+        for width: CGFloat in [400, 760] {
+            let content = NativeDeleteResultCard(item: item, reviewForkHistory: {})
+                .padding(16).frame(width: width)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .environment(\.colorScheme, .dark)
+            let renderer = ImageRenderer(content: content)
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.nsImage)
+            XCTAssertEqual(image.size.width, width, accuracy: 1)
+            heights.append(image.size.height)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Delete-result-card-\(Int(width))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertGreaterThan(heights[0], heights[1] + 40, "The full reason must wrap and grow vertically instead of truncating")
+    }
+
     func testDeletePreviewKeepsFooterWithinScreenBounds() {
         for screen in [CGSize(width: 1_280, height: 720), CGSize(width: 1_440, height: 900),
                        CGSize(width: 800, height: 600), CGSize(width: 2_560, height: 1_440)] {
@@ -361,6 +434,108 @@ final class SessionManagerModelTests: XCTestCase {
         _ = model.setGhostRepairBulkInventoryPresented(false)
         model.presentCleanupAfterDeletePreview()
         XCTAssertFalse(model.isGhostRepairBulkInventoryPresented, "Consume navigation once")
+    }
+
+    func testNextDeleteReleasesVerifiedCleanupWithoutRestartOrReplay() async throws {
+        for noResidue in [false, true] {
+            for count in [1, 5] {
+                let f = try makeIntegratedDeleteFixture(noResidue: noResidue, selectedCount: count)
+                await f.model.continueFreshNativeDeleteCleanup(
+                    report: f.report, confirmedPreviewID: f.report.previewID,
+                    confirmedNativeSessionIDs: f.report.items.map(\.nativeSessionID))
+                XCTAssertTrue(f.model.nativeDeleteDesktopCleanupVerified(reportID: f.report.id))
+                f.model.presentGhostRepairBulkInventory()
+                XCTAssertTrue(f.model.setGhostRepairBulkInventoryPresented(false))
+                XCTAssertTrue(f.model.nativeDeleteDesktopCleanupVerified(reportID: f.report.id),
+                              "Closing retains the verified result until the next explicit operation")
+
+                await assertNextDeleteReachesItsOwnChecks(f.model)
+                XCTAssertEqual(f.model.nativeDeleteDesktopCleanupState, .idle)
+                XCTAssertEqual(f.model.ghostRepairCleanupState, .idle)
+                XCTAssertFalse(f.model.isGhostRepairBulkProtectedOperationActive)
+                XCTAssertEqual(f.model.latestNativeDeleteReport?.id, f.report.id)
+
+                // Releasing presentation state must not restore consent for the old Delete.
+                await f.model.continueFreshNativeDeleteCleanup(
+                    report: f.report, confirmedPreviewID: f.report.previewID,
+                    confirmedNativeSessionIDs: f.report.items.map(\.nativeSessionID))
+                let receipts = await f.receipt.requestCount()
+                let executions = await f.repair.executionRequestCount()
+                XCTAssertEqual(receipts, noResidue ? 0 : 1)
+                XCTAssertEqual(executions, noResidue ? 0 : 1)
+                XCTAssertEqual(f.model.nativeDeleteDesktopCleanupState, .idle)
+            }
+        }
+    }
+
+    func testNextDeleteReleasesSuccessfulStandaloneCleanupWithoutReplay() async throws {
+        let (model, inventory, receipt, repair) = makeSimplifiedCleanupFixture()
+        model.presentGhostRepairBulkInventory()
+        await model.prepareGhostRepairBulkInventory()
+        await model.confirmGhostCleanup(selectedIDs: model.ghostRepairBulkSelection,
+                                        inventoryDigest: inventory.inventoryDigest)
+        await model.continueGhostCleanupAfterShutdown()
+        XCTAssertEqual(model.ghostRepairBulkCompletedScanReport?.outcome, .success)
+        XCTAssertTrue(model.setGhostRepairBulkInventoryPresented(false))
+        XCTAssertEqual(model.ghostRepairBulkCompletedScanReport?.outcome, .success)
+
+        await assertNextDeleteReachesItsOwnChecks(model)
+        XCTAssertEqual(model.ghostRepairCleanupState, .idle)
+        XCTAssertFalse(model.isGhostRepairBulkProtectedOperationActive)
+        let receipts = await receipt.requestCount()
+        let executions = await repair.executionRequestCount()
+        XCTAssertEqual(receipts, 1)
+        XCTAssertEqual(executions, 1)
+    }
+
+    func testNextDeleteKeepsUnfinishedCleanupAndItsOriginalIdentity() async throws {
+        for state in ["awaitingShutdown", "reviewBlocked", "executionUnknown"] {
+            let f = try makeIntegratedDeleteFixture(
+                reviewBlocked: state == "reviewBlocked" ? "Fixture review blocked." : nil,
+                executionUnknown: state == "executionUnknown", selectedCount: 5)
+            if state == "awaitingShutdown" { await f.repair.setShutdownBlocked(true) }
+            await f.model.continueFreshNativeDeleteCleanup(
+                report: f.report, confirmedPreviewID: f.report.previewID,
+                confirmedNativeSessionIDs: f.report.items.map(\.nativeSessionID))
+            f.model.presentGhostRepairBulkInventory()
+            XCTAssertTrue(f.model.setGhostRepairBulkInventoryPresented(false))
+            let before = f.model.nativeDeleteDesktopCleanupState
+            let cleanup = f.model.ghostRepairCleanupState
+            let receipt = f.model.ghostRepairBulkConfirmationReceipt
+            let preview = nextDeletePreview()
+            f.model.pendingNativeDeletePreview = preview
+
+            let failure = await f.model.executeNativeDelete(preview, confirmationToken: preview.confirmationToken)
+            XCTAssertEqual(failure, .cleanupRequired, state)
+            XCTAssertEqual(f.model.nativeDeleteDesktopCleanupState, before, state)
+            XCTAssertEqual(f.model.ghostRepairCleanupState, cleanup, state)
+            XCTAssertEqual(f.model.ghostRepairBulkConfirmationReceipt, receipt, state)
+            XCTAssertEqual(f.model.pendingNativeDeletePreview?.id, preview.id)
+            let receipts = await f.receipt.requestCount()
+            let executions = await f.repair.executionRequestCount()
+            XCTAssertEqual(receipts, 1)
+            XCTAssertEqual(executions, state == "executionUnknown" ? 1 : 0)
+        }
+    }
+
+    private func nextDeletePreview() -> OperationPreview {
+        OperationPreview(id: UUID(), provider: .codex, operation: .emptyTrash,
+                         confirmationToken: "fixture", generatedAt: Date(), items: [], warnings: [])
+    }
+
+    private func assertNextDeleteReachesItsOwnChecks(
+        _ model: SessionManagerModel, file: StaticString = #filePath, line: UInt = #line
+    ) async {
+        let preview = nextDeletePreview()
+        model.pendingNativeDeletePreview = preview
+        let failure = await model.executeNativeDelete(preview, confirmationToken: preview.confirmationToken)
+        // These fixtures have no live Delete coordinator: passing the old-cleanup
+        // gate must reach the new request's normal checks, never real deletion.
+        XCTAssertNotEqual(failure, .cleanupRequired, file: file, line: line)
+        XCTAssertTrue(failure?.message.contains("Permanent Delete execution is unavailable") == true,
+                      file: file, line: line)
+        XCTAssertEqual(model.pendingNativeDeletePreview?.id, preview.id, file: file, line: line)
+        XCTAssertNil(model.errorMessage, file: file, line: line)
     }
 
     func testUnreadableMetadataDoesNotAnnounceCodexUpdate() async throws {
@@ -825,8 +1000,6 @@ final class SessionManagerModelTests: XCTestCase {
             XCTAssertLessThanOrEqual(size.height, screen.height - 120)
             XCTAssertLessThanOrEqual(size.height, 720)
         }
-        XCTAssertEqual(NativeDeleteReportSheetLayout.tableHeight(itemCount: 1), 100)
-        XCTAssertEqual(NativeDeleteReportSheetLayout.tableHeight(itemCount: 500), 300)
     }
 
     func testStartsOnCodexActiveInsteadOfAllSessions() {

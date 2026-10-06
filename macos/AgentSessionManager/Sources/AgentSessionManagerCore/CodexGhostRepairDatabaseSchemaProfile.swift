@@ -69,13 +69,29 @@ struct CodexGhostRepairDatabaseSchemaProfile: Equatable, Sendable {
                          exactColumns: table.exactColumns, customIndexes: table.customIndexes)
         })
 
-    static let admittedProfiles = [desktopV32, desktopV33, desktopV34, desktopV34Extended]
+    /// October keeps user_version 34 but adds async status and nominal scheduling.
+    /// Keep a distinct evidence identity; old snapshots cannot admit this layout.
+    static let desktopV34Async = Self(
+        identifier: "desktop-v34-async",
+        databaseVersions: desktopV34.databaseVersions,
+        desktopTables: desktopV34Extended.desktopTables.map { table in
+            let added: [CodexGhostRepairSQLiteColumnContract]
+            switch table.table {
+            case "local_thread_catalog": added = [column("chatgpt_async_status", "INTEGER")]
+            case "automations": added = [column("next_run_nominal_at", "INTEGER")]
+            default: added = []
+            }
+            return .init(table: table.table, columns: table.columns + added,
+                         exactColumns: table.exactColumns, customIndexes: table.customIndexes)
+        })
+
+    static let admittedProfiles = [desktopV32, desktopV33, desktopV34, desktopV34Extended, desktopV34Async]
     static let inspectionProfiles = admittedProfiles
 
     // Old persisted evidence retains its encoding/hash. The same-version
     // extension always requires the explicit marker from a full schema read.
-    var evidenceIdentifier: String? { self == .desktopV34Extended ? identifier : nil }
-    var timedHistoryRequired: Bool { self == .desktopV34Extended }
+    var evidenceIdentifier: String? { timedHistoryRequired ? identifier : nil }
+    var timedHistoryRequired: Bool { self == .desktopV34Extended || self == .desktopV34Async }
 
     static func admitted(desktopUserVersion: Int32)
         -> CodexGhostRepairDatabaseSchemaProfile?
@@ -367,7 +383,8 @@ extension CodexGhostRepairDatabaseSchemaProfile {
         }
         let columns = try desktop.query("PRAGMA table_info('local_thread_catalog')", maximumRows: 128)
         let extended = columns.contains { $0.value(named: "name") == .text("trial_conversation_type") }
-        let profile: Self? = extended ? .desktopV34Extended : nil
+        let asyncStatus = columns.contains { $0.value(named: "name") == .text("chatgpt_async_status") }
+        let profile: Self? = extended ? (asyncStatus ? .desktopV34Async : .desktopV34Extended) : nil
         return try handles.map { database, handle in
             let version = try handle.schemaVersion()
             if extended {

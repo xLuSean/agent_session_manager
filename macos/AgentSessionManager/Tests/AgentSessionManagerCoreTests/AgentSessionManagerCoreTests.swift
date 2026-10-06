@@ -3,6 +3,116 @@ import XCTest
 import AgentSessionManagerFixtures
 
 final class AgentSessionManagerCoreTests: XCTestCase {
+    func testForkMetadataReadDistinguishesExplicitNullFromMissingField() throws {
+        let record = makeCodexRecord(id: "source", parentThreadID: nil, name: "Source", isPinned: false)
+        var thread = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
+        func decode() throws -> CodexThreadReadResponse {
+            try JSONDecoder().decode(CodexThreadReadResponse.self,
+                from: JSONSerialization.data(withJSONObject: ["thread": thread]))
+        }
+        XCTAssertFalse(try decode().thread.forkHistoryReadComplete)
+        thread["forkedFromId"] = NSNull()
+        XCTAssertTrue(try decode().thread.forkHistoryReadComplete)
+        XCTAssertNil(try decode().thread.forkedFromId)
+        thread["forkedFromId"] = "origin"
+        XCTAssertEqual(try decode().thread.forkedFromId, "origin")
+        XCTAssertTrue(try decode().thread.forkHistoryReadComplete)
+    }
+
+    func testForkMetadataHydrationRestoresListOmissionsWithoutReplacingLifecycleEvidence() throws {
+        let source = makeCodexRecord(id: "source", parentThreadID: nil, name: "Source", isPinned: true)
+        let fork = makeCodexRecord(id: "fork", parentThreadID: "subagent-parent", name: "Fork", isPinned: false)
+        var calls: [String] = []
+        let result = CodexForkHistoryInventory.hydrate(records: [source, fork], deadline: .distantFuture) { id in
+            calls.append(id)
+            var exact = makeCodexRecord(id: id, parentThreadID: nil, name: "Different metadata title", isPinned: false)
+            exact.forkedFromId = id == "fork" ? "source" : nil
+            exact.forkHistoryReadComplete = true
+            return exact
+        }
+        XCTAssertEqual(calls, ["source", "fork"])
+        XCTAssertTrue(result.allSatisfy(\.forkHistoryReadComplete))
+        XCTAssertEqual(result[1].forkedFromId, "source")
+        XCTAssertEqual(result[0].isPinned, true)
+        XCTAssertEqual(result[1].parentThreadId, "subagent-parent")
+        XCTAssertEqual(result[1].name, "Fork")
+        let scope = CodexAppServerProvider.archiveScope(snapshot: makeSnapshot(
+            active: [source], archived: [fork], descendantRecords: result,
+            descendantNativeStates: ["source": .active, "fork": .archived], descendantGraphComplete: true))
+        XCTAssertTrue(scope.nodes.allSatisfy { $0.forkHistoryKnown == true })
+        XCTAssertEqual(SessionForkHistory.dependentIDs(of: "source", nodes: scope.nodes), ["fork"])
+        XCTAssertEqual(try SessionForkHistory.deletionOrder(["source", "fork"], nodes: scope.nodes), ["fork", "source"])
+    }
+
+    func testForkMetadataFailuresAndBoundsRemainUnknownWithoutBlockingOtherRows() {
+        var listed = makeCodexRecord(id: "a", parentThreadID: nil, name: "Listed", isPinned: false)
+        listed.forkedFromId = "old-source"
+        let second = makeCodexRecord(id: "b", parentThreadID: nil, name: "Second", isPinned: false)
+        var exact = listed
+        exact.forkedFromId = "different-source"
+        exact.forkHistoryReadComplete = true
+        let conflict = CodexForkHistoryInventory.hydrate(records: [listed], deadline: .distantFuture) { _ in exact }
+        XCTAssertFalse(conflict[0].forkHistoryReadComplete)
+        XCTAssertEqual(conflict[0].forkedFromId, "old-source")
+        var calls: [String] = []
+        let result = CodexForkHistoryInventory.hydrate(records: [listed, second], deadline: .distantFuture) { id in
+            calls.append(id)
+            if id == "a" { throw CodexAppServerError.responseTimeout }
+            var value = second; value.forkHistoryReadComplete = true; return value
+        }
+        XCTAssertEqual(calls, ["a", "b"])
+        XCTAssertFalse(result[0].forkHistoryReadComplete)
+        XCTAssertTrue(result[1].forkHistoryReadComplete)
+        for (bound, deadline) in [(0, Date.distantFuture), (2, Date.distantPast)] {
+            let bounded = CodexForkHistoryInventory.hydrate(records: [listed, second], maximumReads: bound, deadline: deadline) { _ in
+                XCTFail("No request is allowed after the bound"); return second
+            }
+            XCTAssertTrue(bounded.allSatisfy { !$0.forkHistoryReadComplete })
+        }
+        let wrongIdentity = CodexForkHistoryInventory.hydrate(records: [listed], deadline: .distantFuture) { _ in
+            var value = second; value.forkHistoryReadComplete = true; return value
+        }
+        XCTAssertFalse(wrongIdentity[0].forkHistoryReadComplete)
+    }
+
+    func testForkHistoryDecodesSeparatelyFromSubagentParentAndKeepsArchivedTitles() throws {
+        let source = makeCodexRecord(id: "source", parentThreadID: nil, name: "Source history", isPinned: false)
+        var fork = makeCodexRecord(id: "fork", parentThreadID: "agent-parent", name: "Archived fork", isPinned: false)
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(fork)) as? [String: Any])
+        payload["forkedFromId"] = "source"
+        fork = try JSONDecoder().decode(CodexThreadRecord.self, from: JSONSerialization.data(withJSONObject: payload))
+        XCTAssertEqual(fork.parentThreadId, "agent-parent")
+        XCTAssertEqual(fork.forkedFromId, "source")
+        let scope = CodexAppServerProvider.archiveScope(snapshot: makeSnapshot(
+            active: [source], archived: [fork], descendantRecords: [source, fork],
+            descendantNativeStates: ["source": .active, "fork": .archived], descendantGraphComplete: true))
+        let forkNode = try XCTUnwrap(scope.nodes.first { $0.nativeSessionID == "fork" })
+        XCTAssertEqual(forkNode.forkedFromNativeSessionID, "source")
+        XCTAssertEqual(forkNode.parentNativeSessionID, "agent-parent")
+        XCTAssertEqual(forkNode.title, "Archived fork")
+        XCTAssertEqual(forkNode.nativeState, .archived)
+        XCTAssertEqual(SessionForkHistory.familyIDs(of: "fork", nodes: scope.nodes), ["source", "fork"])
+    }
+
+    func testForkHistoryFindsAncestorsSiblingsMissingSourcesAndRejectsCyclesForDeletion() throws {
+        func node(_ id: String, _ source: String?) -> ArchiveScopeNode {
+            .init(managerKey: "codex:\(id)", nativeSessionID: id, forkedFromNativeSessionID: source,
+                  title: "Title \(id)", nativeState: .archived, protection: .init())
+        }
+        let nodes = [node("a", "missing"), node("b", "a"), node("c", "a"), node("d", "b"), node("other", nil)]
+        XCTAssertEqual(SessionForkHistory.familyIDs(of: "b", nodes: nodes), ["missing", "a", "b", "c", "d"])
+        XCTAssertEqual(SessionForkHistory.dependentIDs(of: "b", nodes: nodes), ["d"], "Do not suggest deleting an ancestor or sibling to remove this fork")
+        XCTAssertEqual(SessionForkHistory.dependentIDs(of: "a", nodes: nodes), ["b", "c", "d"])
+        XCTAssertEqual(SessionForkHistory.dependentIDs(of: "missing", nodes: nodes), ["a", "b", "c", "d"])
+        XCTAssertTrue(SessionForkHistory.dependentIDs(of: "other", nodes: nodes).isEmpty)
+        XCTAssertEqual(try SessionForkHistory.deletionOrder(["a", "b", "d"], nodes: nodes), ["d", "b", "a"])
+        XCTAssertEqual(try SessionForkHistory.deletionOrder(["a"], nodes: nodes), ["a"], "Never add an unselected fork")
+        let cycle = [node("a", "b"), node("b", "a")]
+        XCTAssertEqual(SessionForkHistory.familyIDs(of: "a", nodes: cycle), ["a", "b"])
+        XCTAssertEqual(SessionForkHistory.dependentIDs(of: "a", nodes: cycle), ["b"])
+        XCTAssertThrowsError(try SessionForkHistory.deletionOrder(["a", "b"], nodes: cycle))
+    }
+
     func testOnlyIrreversibleSessionDeletionRequiresTypedConfirmation() {
         XCTAssertTrue(SessionOperation.emptyTrash.requiresTypedConfirmation)
         XCTAssertFalse(SessionOperation.archive.requiresTypedConfirmation)

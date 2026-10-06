@@ -100,6 +100,8 @@ actor CodexGhostRepairBulkProductionMaintenanceObserver:
         profile: CodexGhostRepairSnapshotSourceProfile
     ) -> String {
         switch profile.identifier {
+        case CodexGhostRepairSnapshotSourceProfile.v160DesktopV34Async.identifier:
+            "0.157.1"
         case CodexGhostRepairSnapshotSourceProfile.v156DesktopV34Extended.identifier:
             "0.156.1"
         case CodexGhostRepairSnapshotSourceProfile.v1534DesktopV34.identifier:

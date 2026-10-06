@@ -5,6 +5,8 @@ public struct ArchiveScopeNode: Codable, Hashable, Sendable {
     public let managerKey: String
     public let nativeSessionID: String
     public let parentNativeSessionID: String?
+    public let forkedFromNativeSessionID: String?
+    public let forkHistoryKnown: Bool?
     public let title: String
     public let nativeState: NativeSessionState
     public let protection: SessionProtection
@@ -18,6 +20,8 @@ public struct ArchiveScopeNode: Codable, Hashable, Sendable {
         managerKey: String,
         nativeSessionID: String,
         parentNativeSessionID: String? = nil,
+        forkedFromNativeSessionID: String? = nil,
+        forkHistoryKnown: Bool? = nil,
         title: String,
         nativeState: NativeSessionState,
         protection: SessionProtection,
@@ -30,6 +34,8 @@ public struct ArchiveScopeNode: Codable, Hashable, Sendable {
         self.managerKey = managerKey
         self.nativeSessionID = nativeSessionID
         self.parentNativeSessionID = parentNativeSessionID
+        self.forkedFromNativeSessionID = forkedFromNativeSessionID
+        self.forkHistoryKnown = forkHistoryKnown
         self.title = title
         self.nativeState = nativeState
         self.protection = protection
@@ -44,6 +50,73 @@ public struct ArchiveScopeNode: Codable, Hashable, Sendable {
 public enum ArchiveAffectedRole: String, Codable, Hashable, Sendable {
     case selectedRoot
     case descendant
+}
+
+/// Fork history is separate from subagent ancestry. It supplies navigation and
+/// ordering within an already confirmed selection, never additional authority.
+public enum SessionForkHistory {
+    /// Only forks below this source, excluding ancestors, siblings and the source
+    /// itself. A family is useful for browsing but is not a deletion dependency set.
+    public static func dependentIDs(of nativeID: String, nodes: [ArchiveScopeNode]) -> Set<String> {
+        var children: [String: Set<String>] = [:]
+        for node in nodes {
+            guard let source = node.forkedFromNativeSessionID else { continue }
+            children[source, default: []].insert(node.nativeSessionID)
+        }
+        var seen: Set<String> = [nativeID]
+        var pending = [nativeID]
+        while let id = pending.popLast() {
+            for child in children[id] ?? [] where seen.insert(child).inserted {
+                pending.append(child)
+            }
+        }
+        return seen.subtracting([nativeID])
+    }
+
+    public static func familyIDs(of nativeID: String, nodes: [ArchiveScopeNode]) -> Set<String> {
+        var neighbors: [String: Set<String>] = [:]
+        for node in nodes {
+            guard let source = node.forkedFromNativeSessionID else { continue }
+            neighbors[node.nativeSessionID, default: []].insert(source)
+            neighbors[source, default: []].insert(node.nativeSessionID)
+        }
+        var seen: Set<String> = [nativeID]
+        var pending = [nativeID]
+        while let id = pending.popLast() {
+            for neighbor in neighbors[id] ?? [] where seen.insert(neighbor).inserted {
+                pending.append(neighbor)
+            }
+        }
+        return seen
+    }
+
+    public static func deletionOrder(_ selectedIDs: [String], nodes: [ArchiveScopeNode]) throws -> [String] {
+        guard Set(selectedIDs).count == selectedIDs.count else {
+            throw PersistentStateError.invalidRecord("Delete selection contains duplicate identities.")
+        }
+        let selected = Set(selectedIDs)
+        var children: [String: Set<String>] = [:]
+        var parents: [String: String] = [:]
+        for node in nodes where selected.contains(node.nativeSessionID) {
+            guard let source = node.forkedFromNativeSessionID, selected.contains(source) else { continue }
+            if let previous = parents[node.nativeSessionID], previous != source {
+                throw PersistentStateError.invalidRecord("Fork history conflicts for \(node.title) (\(node.nativeSessionID)).")
+            }
+            parents[node.nativeSessionID] = source
+            children[source, default: []].insert(node.nativeSessionID)
+        }
+        var remaining = selected
+        var ordered: [String] = []
+        while !remaining.isEmpty {
+            let ready = remaining.filter { children[$0, default: []].isDisjoint(with: remaining) }.sorted()
+            guard !ready.isEmpty else {
+                throw PersistentStateError.invalidRecord("Selected fork history contains a cycle; refresh and review the related conversations.")
+            }
+            ordered.append(contentsOf: ready)
+            remaining.subtract(ready)
+        }
+        return ordered
+    }
 }
 
 public struct ArchiveAffectedItem: Identifiable, Codable, Hashable, Sendable {

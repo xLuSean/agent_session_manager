@@ -12,6 +12,7 @@ import {
   GHOST_REPAIR_DATABASE_CONTRACT_V33,
   GHOST_REPAIR_DATABASE_CONTRACT_V34,
   GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED,
+  GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC,
   DESKTOP_RUNTIME_RELATIVE_PATHS,
   resolveDesktopRuntimeExecutable,
   UNADMITTED_GHOST_REPAIR_V33_CANDIDATE,
@@ -59,6 +60,23 @@ test("extended v34 admission requires exact runtime and timed history", () => {
     "candidate_requires_runtime_admission");
   databases.threadHistory.tables.thread_items.pop();
   assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.158.0-alpha.2.1", databases }).verdict, "blocked_schema_drift");
+});
+
+test("async v34 keeps the shared provider's old pair and requires exact new columns", () => {
+  const databases = compatibleDatabases(GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC.databases);
+  for (const runtimeVersion of ["0.157.1", "0.160.0"]) {
+    const result = evaluateGhostRepairContract({ runtimeVersion, databases });
+    assert.equal(result.verdict, "ready_current_build");
+    assert.equal(result.schemaProfileIdentifier, "desktop-v34-async");
+  }
+  for (const runtimeVersion of ["0.156.1", "0.158.0-alpha.2.1", "0.160.1"]) {
+    assert.equal(evaluateGhostRepairContract({ runtimeVersion, databases }).verdict, "candidate_requires_runtime_admission");
+  }
+  for (const [role, table] of [["desktop", "local_thread_catalog"], ["desktop", "automations"], ["threadHistory", "thread_items"]]) {
+    const changed = structuredClone(databases);
+    changed[role].tables[table].pop();
+    assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.160.0", databases: changed }).verdict, "blocked_schema_drift");
+  }
 });
 
 test("same version cannot accept partial or arbitrary Desktop schema additions", () => {
@@ -634,6 +652,25 @@ test("v157 isolated runtime evidence stays frozen and contains no user paths", (
     assert.equal(runtime.requestBoundary.lifecycleMutationRequests, 0);
   }
   assert.equal(fixture.sourceLayout.desktopSchemaProfile, "desktop-v34-extended");
+  assert.equal(fixture.safetyContract.mutationAuthorityGranted, false);
+  assert.doesNotMatch(raw, /\/Users\/|\/Applications\/|\/private\/|\/var\//);
+});
+
+test("v160 evidence records independently observed runtimes without private data", () => {
+  const raw = readFileSync(resolve(repositoryRoot, "scripts/fixtures/current-v160-read-only-evidence.json"), "utf8");
+  const fixture = JSON.parse(raw);
+  const source = readFileSync(resolve(repositoryRoot, "macos/AgentSessionManager/Sources/AgentSessionManagerCore/CodexGhostRepairExperimentalAbsenceContract.swift"), "utf8");
+  assert.ok(source.includes(createHash("sha256").update(raw).digest("hex")));
+  assert.deepEqual(fixture.runtimeProfiles.map(r => r.runtimeVersion), ["0.160.0", "0.157.1"]);
+  for (const runtime of fixture.runtimeProfiles) {
+    assert.ok(source.includes(runtime.executableSha256));
+    assert.ok(source.includes(runtime.generatedProtocol.schemaBundleSha256));
+    assert.equal(runtime.missingThreadRead.rpcCode, -32600);
+    assert.equal(runtime.missingThreadRead.messageTemplate, "thread not loaded: {thread_id}");
+    assert.equal(runtime.requestBoundary.existingThreadIDsRead, 0);
+    assert.equal(runtime.requestBoundary.lifecycleMutationRequests, 0);
+  }
+  assert.equal(fixture.sourceLayout.desktopSchemaProfile, "desktop-v34-async");
   assert.equal(fixture.safetyContract.mutationAuthorityGranted, false);
   assert.doesNotMatch(raw, /\/Users\/|\/Applications\/|\/private\/|\/var\//);
 });

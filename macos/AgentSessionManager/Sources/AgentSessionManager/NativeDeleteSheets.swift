@@ -9,6 +9,8 @@ struct NativeDeletePreviewSheet: View {
     @State private var typedToken = ""
     @State private var isSubmitting = false
     @State private var submissionFailure: NativeDeleteSubmissionFailure?
+    @State private var forkHistoryTarget: ForkHistoryTarget?
+    @State private var revealForkSelection = false
 
     var body: some View {
         let size = NativeDeletePreviewSheetLayout.size(
@@ -37,6 +39,12 @@ struct NativeDeletePreviewSheet: View {
         .padding(24)
         .frame(width: size.width, height: size.height)
         .interactiveDismissDisabled(isSubmitting)
+        .sheet(item: $forkHistoryTarget, onDismiss: {
+            if revealForkSelection { dismiss() }
+        }) { target in
+            ForkHistorySheet(target: target, onSelection: { revealForkSelection = true })
+                .environmentObject(model)
+        }
     }
 
     private var previewContent: some View {
@@ -46,6 +54,36 @@ struct NativeDeletePreviewSheet: View {
                 .font(.callout)
 
             NativePreviewItemList(items: preview.items)
+
+            DisclosureGroup("Fork history for this selection") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Selected forks are deleted before their sources. Related conversations outside this preview are kept; review them before confirming.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !model.forkHistoryComplete {
+                        Text("Fork relationship inventory is incomplete. Missing relationships do not prove this selection is independent.")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    ForEach(preview.items) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).font(.headline)
+                            Text(item.nativeID).font(.caption.monospaced()).textSelection(.enabled)
+                            if let source = model.forkHistoryNodes.first(where: {
+                                $0.nativeSessionID == item.nativeID
+                            })?.forkedFromNativeSessionID {
+                                Text("Forked from: \(model.conversationTitle(for: source))").font(.callout)
+                                Text(source).font(.caption.monospaced()).textSelection(.enabled)
+                            }
+                            let related = Set(model.forkHistoryIDs(for: item.nativeID)).subtracting([item.nativeID])
+                            let outside = related.subtracting(preview.items.map(\.nativeID))
+                            Text("\(related.count) related conversations · \(outside.count) outside this selection")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Button("Review Fork History…") {
+                                forkHistoryTarget = .init(id: item.nativeID, title: item.title)
+                            }.disabled(isSubmitting)
+                        }
+                    }
+                }
+            }
 
             NativeOperationDetails(warnings: preview.warnings)
 
@@ -139,6 +177,8 @@ struct NativeDeleteReportSheet: View {
     @EnvironmentObject private var model: SessionManagerModel
     @Environment(\.dismiss) private var dismiss
     let report: NativeDeleteReport
+    @State private var forkHistoryTarget: ForkHistoryTarget?
+    @State private var revealForkSelection = false
 
     var body: some View {
         let size = NativeDeleteReportSheetLayout.size(
@@ -162,6 +202,12 @@ struct NativeDeleteReportSheet: View {
         }
         .padding(24)
         .frame(width: size.width, height: size.height)
+        .sheet(item: $forkHistoryTarget, onDismiss: {
+            if revealForkSelection { dismiss() }
+        }) { target in
+            ForkHistorySheet(target: target, onSelection: { revealForkSelection = true })
+                .environmentObject(model)
+        }
     }
 
     private var reportContent: some View {
@@ -178,7 +224,27 @@ struct NativeDeleteReportSheet: View {
             HStack(spacing: 24) {
                 metric("Verified absent", report.successCount)
                 metric("Failed", report.failureCount)
+                metric("Not attempted", report.notAttemptedCount)
                 metric("Unknown", report.unknownCount)
+            }
+
+            // Put actionable, wrapping reasons first. A one-line Table hides both
+            // the rejection and the recovery button below a separate scroll area.
+            if report.items.contains(where: { $0.outcome != .success }) {
+                Text("Conversations needing attention").font(.headline)
+                ForEach(report.items.filter { $0.outcome != .success }) { item in
+                    NativeDeleteResultCard(item: item) {
+                        forkHistoryTarget = .init(id: item.nativeSessionID, title: item.title)
+                    }
+                }
+            }
+
+            if !successfulItems.isEmpty {
+                DisclosureGroup("Verified deleted conversations (\(successfulItems.count))") {
+                    ForEach(successfulItems) { item in
+                        NativeDeleteResultCard(item: item, reviewForkHistory: {})
+                    }
+                }
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -207,40 +273,6 @@ struct NativeDeleteReportSheet: View {
             }
             .textSelection(.enabled)
 
-            Table(report.items) {
-                TableColumn("Result") { item in
-                    Text(item.outcome.rawValue.capitalized)
-                        .foregroundStyle(color(for: item.outcome))
-                }
-                TableColumn("Title") { Text($0.title).lineLimit(1).help($0.title) }
-                TableColumn("Session ID") {
-                    Text($0.nativeSessionID)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                }
-                TableColumn("Native state") {
-                    Text($0.observedNativeState.rawValue.capitalized)
-                }
-                TableColumn("Detail") { item in
-                    Text(item.errorCode ?? "—")
-                        .font(.caption.monospaced())
-                        .lineLimit(1)
-                        .help(item.message ?? item.errorCode ?? "Official absence verified")
-                }
-            }
-            .frame(height: NativeDeleteReportSheetLayout.tableHeight(itemCount: report.items.count))
-
-            if let item = report.items.first, let message = item.message {
-                VStack(alignment: .leading, spacing: 5) {
-                    if let errorCode = item.errorCode {
-                        Text(errorCode).font(.caption.monospaced().weight(.semibold))
-                    }
-                    Text(message).font(.callout).textSelection(.enabled)
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
-            }
 
             Text(
                 successfulItems.isEmpty
@@ -260,6 +292,7 @@ struct NativeDeleteReportSheet: View {
                     .font(.callout.weight(.semibold))
                     LazyVStack(alignment: .leading, spacing: 3) {
                         ForEach(successfulItems, id: \.nativeSessionID) { item in
+                            Text(item.title).font(.callout)
                             Text(item.nativeSessionID)
                                 .font(.caption.monospaced())
                                 .textSelection(.enabled)
@@ -313,6 +346,9 @@ struct NativeDeleteReportSheet: View {
     }
 
     private var summaryTitle: String {
+        if !report.items.isEmpty, report.notAttemptedCount == report.items.count {
+            return "Deletion was not attempted"
+        }
         if report.outcome == .success {
             return model.nativeDeleteDesktopCleanupVerified(reportID: report.id)
                 ? "Deletion and Desktop cleanup verified"
@@ -351,13 +387,6 @@ struct NativeDeleteReportSheet: View {
         }
     }
 
-    private func color(for outcome: PersistentItemOutcome) -> Color {
-        switch outcome {
-        case .success: .green
-        case .failure: .red
-        case .unknown: .orange
-        }
-    }
 
     private func metric(_ label: String, _ value: Int) -> some View {
         VStack(alignment: .leading, spacing: 2) {

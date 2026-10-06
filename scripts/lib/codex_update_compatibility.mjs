@@ -13,6 +13,7 @@ export const AUDITED_GHOST_REPAIR_RUNTIME_PROFILES = Object.freeze({
   "0.156.1": "desktop-v34-extended",
   "0.157.1": "desktop-v34-extended",
   "0.158.0-alpha.2.1": "desktop-v34-extended",
+  "0.160.0": "desktop-v34-async",
 });
 
 // Metadata observed by the explicit read-only update audit on 2026-08-31.
@@ -269,6 +270,32 @@ export function parseCodexVersion(output) {
   return match?.[1] ?? null;
 }
 
+export const GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC = Object.freeze({
+  identifier: "desktop-v34-async",
+  databases: Object.freeze({
+    ...GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.databases,
+    desktop: Object.freeze({
+      ...GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.databases.desktop,
+      tables: Object.freeze({
+        ...GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.databases.desktop.tables,
+        local_thread_catalog: Object.freeze({ exact: true, columns: Object.freeze([
+          ...GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.databases.desktop.tables.local_thread_catalog.columns,
+          "chatgpt_async_status",
+        ]) }),
+        automations: Object.freeze({
+          ...GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.databases.desktop.tables.automations,
+          columns: Object.freeze([
+            ...GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED.databases.desktop.tables.automations.columns,
+            "next_run_nominal_at",
+          ]),
+        }),
+      }),
+    }),
+  }),
+  runtimeAdmissionGranted: true,
+  mutationAuthority: "none",
+});
+
 export function versionsDiverge(left, right) {
   return Boolean(left && right && left !== right);
 }
@@ -288,7 +315,7 @@ export function evaluateGhostRepairContract({ runtimeVersion, databases }) {
   let inspectionUnavailable = false;
 
   const desktopUserVersion = databases?.desktop?.userVersion;
-  const candidates = [...GHOST_REPAIR_DATABASE_CONTRACTS, GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED].filter(
+  const candidates = [...GHOST_REPAIR_DATABASE_CONTRACTS, GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED, GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC].filter(
     (candidate) =>
       candidate.databases.desktop.userVersion === desktopUserVersion,
   );
@@ -355,6 +382,7 @@ export function evaluateGhostRepairContract({ runtimeVersion, databases }) {
   } else if (
     AUDITED_GHOST_REPAIR_RUNTIME_PROFILES[runtimeVersion]
       === schemaProfile?.identifier
+    || (runtimeVersion === "0.157.1" && schemaProfile?.identifier === "desktop-v34-async")
   ) {
     verdict = "ready_current_build";
   } else {

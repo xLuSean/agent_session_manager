@@ -69,7 +69,7 @@ public struct CodexCompatibilityDatabaseCheck: Codable, Equatable, Sendable, Ide
 /// Inspection evidence is deliberately not a mutation permit. In particular,
 /// schema compatibility cannot manufacture behavioral acceptance for Delete.
 public struct CodexCompatibilityReport: Codable, Equatable, Sendable {
-    public static let policyRevision = 6
+    public static let policyRevision = 7
     public let revision: Int
     public let checkedAt: Date
     public let provider: CodexCompatibilityRuntime
@@ -183,13 +183,14 @@ enum CodexCompatibilityEvaluator {
                     : admitted ? "The required interface matches this build's supported contract. Normal operation checks still apply."
                     : "Interface checks passed, but this runtime's behavior has not been verified. No new mutation permission was granted.")
         }
-        let source = CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(exactRuntimeVersion: version)
+        let source = CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(
+            exactRuntimeVersion: version, desktopSchemaProfileIdentifier: desktopSchemaProfile)
         let databaseMismatch = desktopDatabaseChecks.contains { $0.issue != nil }
         let desktopPairMatches = source.map {
             $0.ownerRuntimeProfileIdentifier == desktopVersion.map { "desktop-bundled-\($0)" }
                 && $0.databaseSchemaProfileIdentifier == desktopSchemaProfile
                 && !desktopDatabaseChecks.contains { $0.inspectionOnly == true }
-                && (desktopSchemaProfile == "desktop-v34-extended"
+                && (["desktop-v34-extended", "desktop-v34-async"].contains(desktopSchemaProfile ?? "")
                     ? desktopDatabaseChecks.first { $0.database == .threadHistory }?.schemaProfileIdentifier == "thread-history-timed"
                     : desktopDatabaseChecks.first { $0.database == .threadHistory }?.schemaProfileIdentifier != "thread-history-timed")
         } ?? false

@@ -19,7 +19,8 @@
 - 永久刪除只能從 Manager Trash Bin 開始；Archive 是保留，不是等待刪除。
 - 已知置頂、執行中、目前對話或置頂子對話都阻擋。置頂／子對話證據未知或衝突也阻擋；不支援的子對話 affected-set 不送 request。
 - 跨主機 running／current／writer 未知不是「已確認無占用」。只在已准入的操作契約下明示 attemptMayFail，允許官方單次 request 安全拒絕；不能用這項例外繞過私有 DB 維護檢查。
-- 確認後先 durable claim，每個 ID 最多送一次 request。官方 batch 全批 preflight，第一個 failure／unknown 後停止，剩餘列 notAttempted；不把多個 RPC 稱為原子批次。
+- 確認後先 durable claim，每個 ID 最多送一次 request。官方 batch 先全批 preflight；Delete 的單筆狀態／保護變更只略過該筆，雙重讀回確認仍存在的單筆失敗不阻擋其他選取項目。共同環境檢查失敗仍不執行整批；unknown 或讀回矛盾停止後續 request。Archive／Restore 保留第一個 failure／unknown 即停止的規則，未送出的列另標 notAttempted；不把多個 RPC 稱為原子批次。
+- Delete 的已確認範圍內，依官方 `forkedFromId` 讓 fork 先於來源執行；不把子代理 `parentThreadId` 當成 fork 引用。關聯檢視與選取不授予刪除權限，不自動加入未選對話；存在未選 fork 時由官方 Delete 拒絕來源刪除。選取範圍的循環或矛盾關係在任何 request 前停止。
 - Archive／Restore 成功分別要求較新、完整、同 runtime、同完整 ID 的 Archived／Active 回讀。
 - Delete 成功須同時有較新的完整 active＋archived inventory 缺席，以及該操作准入版本的精確不存在回應。timeout、自由文字 404、清單漏項或不符 ID 都不能替代。
 - 外部刪除確認使用獨立的 readback-only 契約，不呼叫 Delete，也不借用其他版本的缺席判準。

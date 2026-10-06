@@ -162,7 +162,8 @@ enum BulkShippingCompositionTestFixture {
             at: desktopURL,
             itemCount: itemCount,
             schema: desktopSchema,
-            extended: profile == .v156DesktopV34Extended
+            extended: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile),
+            asyncStatus: profile == .v160DesktopV34Async
         )
         try createSideDatabase(
             at: summariesURL, schema: 2,
@@ -190,7 +191,7 @@ enum BulkShippingCompositionTestFixture {
             at: legacyURL, schema: 0,
             tables: ["CREATE TABLE legacy_sentinel(id INTEGER)"]
         )
-        if profile == .v156DesktopV34Extended {
+        if [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) {
             for (database, url) in [(CodexGhostRepairSnapshotAnalysisDatabase.summaries, summariesURL), (.threadHistory, threadHistoryURL)] {
                 for table in CodexGhostRepairReferencedTables.byDatabase[database, default: []] {
                     try execute("DROP TABLE \(table.table)", at: url)
@@ -357,7 +358,7 @@ enum BulkShippingCompositionTestFixture {
 
         if reviewedResidue {
             precondition(itemCount == 2 && absentIndices.isEmpty)
-            if profile.identifier != CodexGhostRepairSnapshotSourceProfile.v156DesktopV34Extended.identifier {
+            if ![CodexGhostRepairSnapshotSourceProfile.v156DesktopV34Extended.identifier, CodexGhostRepairSnapshotSourceProfile.v160DesktopV34Async.identifier].contains(profile.identifier) {
                 try execute("UPDATE automations SET status = 'PAUSED' WHERE id = 'automation-1'", at: desktopURL)
             }
             for index in 0...2 {
@@ -616,16 +617,16 @@ enum BulkShippingCompositionTestFixture {
             databases: [
                 .init(database: .desktop, schemaVersion: desktopSchema,
                       integrityCheckPassed: true, foreignKeyViolationCount: 0,
-                      schemaProfileIdentifier: profile == .v156DesktopV34Extended ? "desktop-v34-extended" : nil),
+                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
                 .init(database: .summaries, schemaVersion: 2,
                       integrityCheckPassed: true, foreignKeyViolationCount: 0,
-                      schemaProfileIdentifier: profile == .v156DesktopV34Extended ? "desktop-v34-extended" : nil),
+                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
                 .init(database: .state, schemaVersion: 0,
                       integrityCheckPassed: true, foreignKeyViolationCount: 0,
-                      schemaProfileIdentifier: profile == .v156DesktopV34Extended ? "desktop-v34-extended" : nil),
+                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
                 .init(database: .threadHistory, schemaVersion: 0,
                       integrityCheckPassed: true, foreignKeyViolationCount: 0,
-                      schemaProfileIdentifier: profile == .v156DesktopV34Extended ? "desktop-v34-extended" : nil),
+                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
             ],
             targets: targets,
             protectionEvidence: targets.map {
@@ -683,10 +684,11 @@ enum BulkShippingCompositionTestFixture {
         at url: URL,
         itemCount: Int,
         schema: Int32,
-        extended: Bool = false
+        extended: Bool = false,
+        asyncStatus: Bool = false
     ) throws {
         if extended {
-            try createExtendedDesktop(at: url, itemCount: itemCount)
+            try createExtendedDesktop(at: url, itemCount: itemCount, profile: asyncStatus ? .desktopV34Async : .desktopV34Extended)
             return
         }
         try execute("PRAGMA user_version = \(schema)", at: url)
@@ -764,9 +766,9 @@ enum BulkShippingCompositionTestFixture {
         }
     }
 
-    static func createExtendedDesktop(at url: URL, itemCount: Int) throws {
+    static func createExtendedDesktop(at url: URL, itemCount: Int,
+                                      profile: CodexGhostRepairDatabaseSchemaProfile = .desktopV34Extended) throws {
         try execute("PRAGMA user_version = 34", at: url)
-        let profile = CodexGhostRepairDatabaseSchemaProfile.desktopV34Extended
         for table in profile.desktopTables {
             var definitions = table.columns.map { column in
                 "\(column.name) \(column.declaredType)"
@@ -781,6 +783,11 @@ enum BulkShippingCompositionTestFixture {
             }
         }
         func seed(_ name: String, _ supplied: [String: String]) throws {
+            var supplied = supplied
+            if profile == .desktopV34Async {
+                if name == "local_thread_catalog" { supplied["chatgpt_async_status"] = "2" }
+                if name == "automations" { supplied["next_run_nominal_at"] = "1900000000000" }
+            }
             let table = profile.desktopTables.first { $0.table == name }!
             let columns = table.columns.filter { supplied[$0.name] != nil || ($0.notNull && $0.defaultValue == nil) }
             let values = columns.map { supplied[$0.name] ?? ($0.declaredType == "TEXT" ? "'fixture'" : "1") }
