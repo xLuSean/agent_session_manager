@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import {
   analyzeAbsenceProfiles,
   analyzeSnapshotProfiles,
@@ -9,6 +11,36 @@ import {
 import { repositorySources } from "./support/repository_sources.mjs";
 
 const baseline = repositorySources();
+test("v166 runtime admission remains bound to captured isolated evidence", () => {
+  const bytes = readFileSync(new URL("../fixtures/current-v166-read-only-evidence.json", import.meta.url));
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  assert.ok(baseline.profiles.includes('compatibilityFixtureSHA256: "' + digest + '"'));
+  const evidence = JSON.parse(bytes);
+  assert.deepEqual(evidence.runtimeProfiles.map(value => value.runtimeVersion), ["0.164.0", "0.166.0-alpha.5.1"]);
+  for (const runtime of evidence.runtimeProfiles) {
+    assert.ok(baseline.profiles.includes(runtime.executableSha256));
+    assert.ok(baseline.profiles.includes(runtime.generatedProtocol.schemaBundleSha256));
+    assert.equal(runtime.missingThreadRead.rpcCode, -32600);
+    assert.equal(runtime.requestBoundary.existingThreadIDsRead, 0);
+    assert.equal(runtime.requestBoundary.lifecycleMutationRequests, 0);
+  }
+  assert.equal(evidence.sourceLayout.desktopSchemaProfile, "desktop-v34-realtime");
+  assert.equal(evidence.safetyContract.sourceDatabaseWrites, 0);
+  assert.equal(evidence.safetyContract.networkAllowed, false);
+  assert.equal(evidence.safetyContract.credentialsAvailable, false);
+});
+test("production evidence binds the exact release catalog, optional summaries and original runtime observations", () => {
+  const bytes = readFileSync(new URL("../fixtures/current-v166-production-read-only-evidence.json", import.meta.url));
+  const data = JSON.parse(bytes);
+  const digest = value => createHash("sha256").update(value).digest("hex");
+  assert.ok(baseline.profiles.includes(digest(bytes)));
+  assert.equal(data.runtimeEvidenceSHA256, digest(readFileSync(new URL("../fixtures/" + data.runtimeEvidenceFile, import.meta.url))));
+  const members = data.sourceLayout.members.map(({ fileName, logicalRoot, requiredDatabase }) => ({ fileName, logicalRoot, requiredDatabase }));
+  assert.equal(data.sourceLayout.layoutDigest, digest(JSON.stringify(members)));
+  assert.equal(members.length, 20);
+  assert.deepEqual(members.filter(member => member.requiredDatabase).map(member => member.fileName), ["codex.db", "state_5.sqlite", "thread_history_1.sqlite"]);
+  assert.ok(members.every(member => !member.fileName.includes("-dev.db")));
+});
 const checks = { analyzeAbsenceProfiles, analyzeSnapshotProfiles, analyzeRequestProfileSelection, analyzeSourceAdmission };
 for (const [name, analyze] of Object.entries(checks)) {
   test(name + " validates current sources without historical source rewrites", () => {

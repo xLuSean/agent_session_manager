@@ -211,8 +211,7 @@ struct CodexGhostRepairBulkBackupBoundOperationPlan:
               source.selectedThreadIDs == resolution.selectedThreadIDs,
               source.blockedOutsideBatchCount
                 == resolution.blockedOutsideBatchCount,
-              source.databases.map(\.database)
-                == CodexGhostRepairSnapshotAnalysisDatabase.allCases,
+              CodexGhostRepairDatabaseSchemaProfile.admitted(databases: source.databases) != nil,
               resolution.databaseContracts.map(\.database)
                 == CodexGhostRepairBulkProductionDatabase.allCases,
               destination.requestID == resolution.requestID,
@@ -322,13 +321,17 @@ struct CodexGhostRepairBulkBackupBoundOperationPlan:
               ordinaryCount + automationCount == selectedCount,
               selectedItems.allSatisfy(Self.validItem),
               blockedOutsideBatchCount >= 0,
-              CodexGhostRepairDatabaseSchemaProfile.admitted(
-                  databases: databaseEvidence
-              ) != nil,
+              let schema = CodexGhostRepairDatabaseSchemaProfile.admitted(databases: databaseEvidence),
+              let profile = CodexGhostRepairSnapshotSourceProfile.admitted(sourceLayoutIdentifier: sourceLayoutIdentifier),
+              (profile == .v166Production) == (schema == .desktopV34Production),
+              databaseContracts.first?.canonicalFileName == profile.member(.desktop).rawValue,
+              backup.files.map(\.fileName) == profile.files.map(\.rawValue),
+              backup.files.first(where: { $0.fileName == profile.member(.summaries).rawValue })?.present
+                == databaseEvidence.contains(where: { $0.database == .summaries }),
               databaseContracts.map(\.database)
                 == CodexGhostRepairBulkProductionDatabase.allCases,
               databaseContracts.count == 5,
-              databaseContracts.filter(\.required).count == 4,
+              CodexGhostRepairBulkProductionBundleDatabaseContract.matchesLayout(databaseContracts),
               databaseContracts.filter({
                   $0.role == .futureSingleTransactionMutation
               }).map(\.database) == [.desktop],

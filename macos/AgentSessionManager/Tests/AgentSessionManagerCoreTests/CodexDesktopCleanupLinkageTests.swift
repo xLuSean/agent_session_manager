@@ -369,6 +369,32 @@ final class CodexDesktopCleanupLinkageTests: XCTestCase {
         XCTAssertEqual(count, 0)
     }
 
+    func testVerifiedDevelopmentCleanupNeedsFreshReviewForProductionCatalog() throws {
+        let (_, store, id) = try completedHistoryFixture()
+        defer { store.close() }
+        guard case let .verified(original, _, _) = try store.codexDesktopCleanupStatus(reportID: id),
+              case let .pending(current) = try store.codexDesktopCleanupStatus(reportID: id, requireProductionCatalog: true)
+        else { return XCTFail("A verified development report must reopen for the current catalog.") }
+        XCTAssertEqual(current, original)
+        let second = try BulkShippingCompositionTestFixture.make(itemCount: 2, desktopSchema: 34,
+            profile: .v166Production, runtimeVersion: "0.164.0", omitProductionSummaries: true, managerDatabaseURL: store.databaseURL)
+        addTeardownBlock {
+            _ = try FileManager.default.trashItem(at: second.parent, resultingItemURL: nil)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: second.parent.path))
+        }
+        _ = try store.prepareCodexGhostRepairBulkLiveExecutionJournal(plan: second.livePlan, confirmationReceipt: second.confirmationReceipt)
+        let identity = CodexGhostRepairBulkRecoveryOperationIdentity(requestID: second.livePlan.requestID, operationID: second.confirmationReceipt.operationID)
+        guard case let .bound(bound) = try store.bindCodexDesktopCleanup(handoff: original, bulkIdentity: identity, boundAtMilliseconds: 2_000),
+              case let .prepared(_, readback) = try store.codexDesktopCleanupStatus(reportID: id, requireProductionCatalog: true)
+        else { return XCTFail("The original report must bind a separately confirmed production cleanup.") }
+        XCTAssertEqual(bound, readback)
+        let bindings = try store.withLockedDatabase { db in
+            try store.query("SELECT desktop_catalog FROM codex_desktop_cleanup_bindings WHERE canonical_delete_report_id = ? ORDER BY desktop_catalog",
+                values: [.text(id.uuidString.lowercased())], database: db) { try store.requiredText($0, 0) }
+        }
+        XCTAssertEqual(bindings, ["codex-dev.db", "codex.db"])
+    }
+
     private func completedHistoryFixture(outcome: CodexGhostRepairCategoryABatchOutcome = .success)
         throws -> (BulkShippingCompositionTestFixture.Value, SQLiteStateStore, UUID) {
         let fixture = try BulkShippingCompositionTestFixture.make(itemCount: 2)

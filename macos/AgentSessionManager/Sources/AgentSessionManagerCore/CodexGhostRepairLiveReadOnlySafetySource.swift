@@ -136,8 +136,8 @@ public actor CodexGhostRepairLiveReadOnlySafetySource:
         return CodexGhostRepairSafetySnapshot(
             inventory: inventory,
             exactReadbacks: exactReadbacks,
-            pinnedThreadIDs: rawInventory.desktopPinnedThreadIDs,
-            pinnedInventoryComplete: rawInventory.desktopPinStateAvailable,
+            pinnedThreadIDs: rawInventory.protectedThreadIDs,
+            pinnedInventoryComplete: rawInventory.protectedThreadInventoryComplete,
             executionGate: executionGate
         )
     }
@@ -158,7 +158,7 @@ public actor CodexGhostRepairLiveReadOnlySafetySource:
             observedAt: generic.observedAt,
             inventoryComplete: generic.inventoryComplete,
             protectionComplete: !rawInventory.isTruncated
-                && rawInventory.desktopPinStateAvailable
+                && rawInventory.protectedThreadInventoryComplete
                 && rawInventory.descendantGraphComplete,
             sessions: generic.sessions,
             archiveScopeNodes: generic.archiveScopeNodes,

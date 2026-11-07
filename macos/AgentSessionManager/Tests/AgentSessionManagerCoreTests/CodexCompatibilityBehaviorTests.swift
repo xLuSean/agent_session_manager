@@ -133,6 +133,31 @@ final class CodexCompatibilityBehaviorTests: XCTestCase {
         XCTAssertNil(reloaded?.behavior)
     }
 
+    func testNestedCLIBundleKeepsResourcesAndVerifiedExecutableInIsolation() throws {
+        let original = try fixture(mode: "success")
+        let bundle = root.appendingPathComponent("Original.app")
+        let macOS = bundle.appendingPathComponent("Contents/MacOS")
+        let resources = bundle.appendingPathComponent("Contents/Resources")
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        let executable = macOS.appendingPathComponent("codex")
+        try FileManager.default.copyItem(at: original, to: executable)
+        let info: [String: String] = ["CFBundleIdentifier": "com.openai.codex.cli", "CFBundleExecutable": "codex"]
+        let plist = bundle.appendingPathComponent("Contents/Info.plist")
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: plist)
+        try Data("sealed resource".utf8).write(to: resources.appendingPathComponent("fixture"))
+        let destination = root.appendingPathComponent("isolated")
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+        let copy = try CodexCompatibilityBehaviorRunner.copyRuntime(executable, into: destination)
+        XCTAssertEqual(copy.path, destination.appendingPathComponent("CodexCLI.app/Contents/MacOS/codex").path)
+        XCTAssertEqual(try Data(contentsOf: copy), try Data(contentsOf: executable))
+        XCTAssertEqual(try String(contentsOf: destination.appendingPathComponent("CodexCLI.app/Contents/Resources/fixture")), "sealed resource")
+        let result = try run(executable, feature: .archiveRestore)
+        XCTAssertEqual(result.status, .passed, result.detail)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "unrecognized", "CFBundleExecutable": "codex"], format: .xml, options: 0).write(to: plist)
+        XCTAssertEqual(try run(executable, feature: .officialDelete).status, .failed)
+    }
+
     private func run(_ executable: URL, feature: CodexCompatibilityFeature) throws -> CodexCompatibilityBehaviorResult {
         try CodexCompatibilityBehaviorRunner.run(executable: executable,
             expectedSHA256: CodexCompatibilityInspector.hash(Data(contentsOf: executable)), feature: feature)

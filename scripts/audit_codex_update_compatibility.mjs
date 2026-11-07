@@ -6,6 +6,7 @@ import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   GHOST_REPAIR_DATABASE_CONTRACT_V33,
+  GHOST_REPAIR_DATABASE_CONTRACT_V166_PRODUCTION,
   evaluateGhostRepairContract,
   overallCompatibilityVerdict,
   parseCodexVersion,
@@ -114,19 +115,21 @@ function sqliteJSON(databasePath, sql) {
   }
 }
 
-function inspectGhostRepairDatabases() {
+function inspectGhostRepairDatabases(desktop) {
   const databases = {};
-  // The v33 profile contains the superset of fixed table names and the only
-  // currently required custom index. The evaluator selects v32 or v33 from
-  // the observed Desktop user_version after this metadata-only inspection.
-  for (const [role, contract] of Object.entries(
-    GHOST_REPAIR_DATABASE_CONTRACT_V33.databases,
-  )) {
+  const production = desktop?.appVersion === "26.1027.61615" && desktop.appBuild === "24141";
+  const contracts = production ? GHOST_REPAIR_DATABASE_CONTRACT_V166_PRODUCTION : GHOST_REPAIR_DATABASE_CONTRACT_V33;
+  for (const [role, contract] of Object.entries(contracts.databases)) {
     const databasePath = join(
       CODEX_HOME,
       contract.relativeDirectory,
       contract.fileName,
     );
+    if (contract.optional && ["", "-wal", "-shm", "-journal"].every(suffix =>
+      lstatSync(databasePath + suffix, { throwIfNoEntry: false }) === undefined)) {
+      databases[role] = { fileName: contract.fileName, absent: true };
+      continue;
+    }
     if (!existsSync(databasePath) || !lstatSync(databasePath).isFile()) {
       continue;
     }
@@ -218,7 +221,7 @@ function main() {
   const desktopLifecycle = lifecycleAudit("desktop", desktop);
   const ghostRepair = evaluateGhostRepairContract({
     runtimeVersion: desktop?.runtimeVersion ?? null,
-    databases: inspectGhostRepairDatabases(),
+    databases: inspectGhostRepairDatabases(desktop),
   });
   const overall = overallCompatibilityVerdict({
     providerLifecycleVerdict: providerLifecycle.status,

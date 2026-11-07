@@ -469,6 +469,8 @@ enum CodexGhostRepairBulkInventoryBuilder {
             .v1534SourceLayoutIdentifier,
         CodexGhostRepairPackagedReadOnlyProfileCatalog.v156SourceLayoutIdentifier,
         CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier,
+        CodexGhostRepairPackagedReadOnlyProfileCatalog.v166SourceLayoutIdentifier,
+        CodexGhostRepairPackagedReadOnlyProfileCatalog.productionV166SourceLayoutIdentifier,
     ]
 
     static func build(
@@ -479,6 +481,11 @@ enum CodexGhostRepairBulkInventoryBuilder {
         input.exactReadPresentThreadIDs.formUnion(exactReadPresentThreadIDs)
         let exactReadPresentThreadIDs = input.exactReadPresentThreadIDs
         try validateSource(input)
+        if [CodexGhostRepairPackagedReadOnlyProfileCatalog.v166SourceLayoutIdentifier,
+            CodexGhostRepairPackagedReadOnlyProfileCatalog.productionV166SourceLayoutIdentifier].contains(input.sourceLayoutIdentifier),
+           input.targets.contains(where: { $0.references.realtimeItems == nil }) {
+            throw CodexGhostRepairError.invalidProtectionEvidence("Realtime history evidence is missing.")
+        }
 
         let protectionByID = try exactProtectionMap(
             input.protectionEvidence,
@@ -491,6 +498,10 @@ enum CodexGhostRepairBulkInventoryBuilder {
             throw CodexGhostRepairError.invalidProtectionEvidence(
                 "Exact-readable inventory evidence contradicts its read outcome."
             )
+        }
+        if input.sourceLayoutIdentifier == CodexGhostRepairPackagedReadOnlyProfileCatalog.productionV166SourceLayoutIdentifier,
+           input.targets.contains(where: { $0.references.activeChatTurns == nil }) {
+            throw CodexGhostRepairError.invalidProtectionEvidence("Active chat turn evidence is missing.")
         }
         let items = try input.targets.map { target in
             guard let protection = protectionByID[target.threadID] else {
@@ -710,7 +721,8 @@ enum CodexGhostRepairBulkInventoryBuilder {
               target.references.canonicalState >= 0,
               target.references.threadTurns >= 0,
               target.references.threadItems >= 0,
-              target.references.historyProjection >= 0 else {
+              target.references.historyProjection >= 0,
+              (target.references.realtimeItems ?? 0) >= 0 else {
             return false
         }
         return (

@@ -62,14 +62,16 @@ public struct CodexCompatibilityDatabaseCheck: Codable, Equatable, Sendable, Ide
     public var inspectionOnly: Bool? = nil
     public var schemaProfileIdentifier: String? = nil
     public var id: CodexGhostRepairSnapshotAnalysisDatabase { database }
-    public var fileName: String { database.canonicalFile.rawValue }
-    public var label: String { issue == nil ? "Structure check passed" : issue == .unavailable ? "Could not check" : "Structure changed" }
+    public var productionCatalog: Bool? = nil
+    public var optionalStoreAbsent: Bool? = nil
+    public var fileName: String { (productionCatalog == true ? database.canonicalFile.productionMember : database.canonicalFile).rawValue }
+    public var label: String { optionalStoreAbsent == true ? "Not created by Desktop" : issue == nil ? "Structure check passed" : issue == .unavailable ? "Could not check" : "Structure changed" }
 }
 
 /// Inspection evidence is deliberately not a mutation permit. In particular,
 /// schema compatibility cannot manufacture behavioral acceptance for Delete.
 public struct CodexCompatibilityReport: Codable, Equatable, Sendable {
-    public static let policyRevision = 7
+    public static let policyRevision = 9
     public let revision: Int
     public let checkedAt: Date
     public let provider: CodexCompatibilityRuntime
@@ -190,7 +192,9 @@ enum CodexCompatibilityEvaluator {
             $0.ownerRuntimeProfileIdentifier == desktopVersion.map { "desktop-bundled-\($0)" }
                 && $0.databaseSchemaProfileIdentifier == desktopSchemaProfile
                 && !desktopDatabaseChecks.contains { $0.inspectionOnly == true }
-                && (["desktop-v34-extended", "desktop-v34-async"].contains(desktopSchemaProfile ?? "")
+                && (["desktop-v34-realtime", "desktop-v34-production"].contains(desktopSchemaProfile ?? "")
+                    ? desktopDatabaseChecks.first { $0.database == .threadHistory }?.schemaProfileIdentifier == CodexThreadHistoryContract.profileIdentifier
+                    : ["desktop-v34-extended", "desktop-v34-async"].contains(desktopSchemaProfile ?? "")
                     ? desktopDatabaseChecks.first { $0.database == .threadHistory }?.schemaProfileIdentifier == "thread-history-timed"
                     : desktopDatabaseChecks.first { $0.database == .threadHistory }?.schemaProfileIdentifier != "thread-history-timed")
         } ?? false

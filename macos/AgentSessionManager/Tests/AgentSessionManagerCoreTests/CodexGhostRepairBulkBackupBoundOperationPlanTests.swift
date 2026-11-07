@@ -386,7 +386,7 @@ final class CodexGhostRepairBulkBackupBoundOperationPlanTests: XCTestCase {
     private func makeFingerprint()
         throws -> CodexGhostRepairSnapshotCanonicalFingerprint
     {
-        let files = CodexGhostRepairSnapshotCanonicalFile.allCases.map {
+        let files = CodexGhostRepairSnapshotCanonicalFile.legacyFiles.map {
             file in
             let present = file.isRequiredDatabase || file == .history
             return CodexGhostRepairSnapshotCanonicalFileEvidence(

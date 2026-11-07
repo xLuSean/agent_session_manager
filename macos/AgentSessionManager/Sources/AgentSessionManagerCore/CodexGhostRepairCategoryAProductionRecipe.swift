@@ -119,9 +119,9 @@ struct CodexGhostRepairCategoryAOperationBoundExecutionSnapshot:
               (1...2).contains(targetThreadIDs.count),
               targetThreadIDs == targetThreadIDs.sorted(),
               Set(targetThreadIDs).count == targetThreadIDs.count,
-              files.count == CodexGhostRepairSnapshotCanonicalFile.allCases.count,
+              files.count == CodexGhostRepairSnapshotCanonicalFile.legacyFiles.count,
               files.map(\.fileName)
-                == CodexGhostRepairSnapshotCanonicalFile.allCases.map(\.rawValue),
+                == CodexGhostRepairSnapshotCanonicalFile.legacyFiles.map(\.rawValue),
               !restoreAuthority,
               !cleanupAuthority,
               !repairMutationAuthority else {
@@ -303,7 +303,7 @@ struct CodexGhostRepairCategoryAProductionRecipeBundle: Sendable {
     private func sourceEvidence()
         throws -> [CodexGhostRepairCategoryAExecutionSnapshotFile]
     {
-        try CodexGhostRepairSnapshotCanonicalFile.allCases.map { file in
+        try CodexGhostRepairSnapshotCanonicalFile.legacyFiles.map { file in
             let url = file.sourceURL(
                 codexHomeURL: disposableBundle.resolution.codexHomeURL,
                 sqliteRootURL: disposableBundle.resolution.sqliteRootURL

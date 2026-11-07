@@ -31,6 +31,7 @@ enum CodexGhostRepairSnapshotSourceLayout {
             || normalized == "codex-cli 0.158.0-alpha.2.1"
             || normalized == "0.160.0"
             || normalized == "codex-cli 0.160.0"
+            || ["0.164.0", "codex-cli 0.164.0", "0.166.0-alpha.5.1", "codex-cli 0.166.0-alpha.5.1"].contains(normalized)
     }
 }
 
@@ -56,7 +57,8 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
         self.ownerRuntimeProfileIdentifier = ownerRuntimeProfileIdentifier
         self.databaseSchemaProfileIdentifier = databaseSchemaProfileIdentifier
         self.layoutDigest = layoutDigest
-        files = CodexGhostRepairSnapshotCanonicalFile.allCases
+        files = identifier == CodexGhostRepairPackagedReadOnlyProfileCatalog.productionV166SourceLayoutIdentifier
+            ? CodexGhostRepairSnapshotCanonicalFile.productionFiles : CodexGhostRepairSnapshotCanonicalFile.legacyFiles
     }
 
     static let v149DesktopV32 = Self(
@@ -123,6 +125,24 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
         layoutDigest: "sha256:75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85"
     )
 
+    static let v166DesktopV34Realtime = Self(
+        identifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.v166SourceLayoutIdentifier,
+        ownerRuntimeProfileIdentifier: "desktop-bundled-0.166.0-alpha.5.1",
+        databaseSchemaProfileIdentifier: "desktop-v34-realtime",
+        layoutDigest: "sha256:75ed09dfd0b221361f0d915f96d49b15991ffb5e3d308d300fc5b62bf9ef9c85"
+    )
+
+    static let v166Production = Self(
+        identifier: CodexGhostRepairPackagedReadOnlyProfileCatalog.productionV166SourceLayoutIdentifier,
+        ownerRuntimeProfileIdentifier: "desktop-bundled-0.166.0-alpha.5.1",
+        databaseSchemaProfileIdentifier: "desktop-v34-production",
+        layoutDigest: "sha256:fe9e336c66f3ad540ff4d74b93131de007df6ef9a14d206bc61dad36c30088da"
+    )
+
+    func member(_ logical: CodexGhostRepairSnapshotCanonicalFile) -> CodexGhostRepairSnapshotCanonicalFile {
+        self == .v166Production ? logical.productionMember : logical
+    }
+
     static func admitted(sourceLayoutIdentifier: String) -> Self? {
         switch sourceLayoutIdentifier {
         case v149DesktopV32.identifier: v149DesktopV32
@@ -132,6 +152,8 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
         case v1534DesktopV34.identifier: v1534DesktopV34
         case v156DesktopV34Extended.identifier: v156DesktopV34Extended
         case v160DesktopV34Async.identifier: v160DesktopV34Async
+        case v166DesktopV34Realtime.identifier: v166DesktopV34Realtime
+        case v166Production.identifier: v166Production
         default: nil
         }
     }
@@ -162,6 +184,8 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
                 || normalized == "codex-cli 0.153.4"
         case Self.v156DesktopV34Extended.identifier:
             return ["0.156.1", "codex-cli 0.156.1", "0.157.1", "codex-cli 0.157.1", "0.158.0-alpha.2.1", "codex-cli 0.158.0-alpha.2.1"].contains(normalized)
+        case Self.v166DesktopV34Realtime.identifier, Self.v166Production.identifier:
+            return ["0.164.0", "codex-cli 0.164.0", "0.166.0-alpha.5.1", "codex-cli 0.166.0-alpha.5.1"].contains(normalized)
         case Self.v160DesktopV34Async.identifier:
             return ["0.157.1", "codex-cli 0.157.1", "0.160.0", "codex-cli 0.160.0"].contains(normalized)
         default:
@@ -173,7 +197,7 @@ struct CodexGhostRepairSnapshotSourceProfile: Equatable, Sendable {
         files evidence: [CodexGhostRepairSnapshotCanonicalFileEvidence]
     ) -> Bool {
         evidence.map(\.fileName) == files.map(\.rawValue)
-            && Set(evidence.map(\.fileName)).count == evidence.count
+            && CodexGhostRepairSnapshotCanonicalFile.validPresence(Array(zip(files, evidence.map(\.exists))))
     }
 
     func admits(
@@ -208,9 +232,55 @@ enum CodexGhostRepairSnapshotCanonicalFile: String, CaseIterable, Sendable {
     case threadHistorySHM = "thread_history_1.sqlite-shm"
     case threadHistoryJournal = "thread_history_1.sqlite-journal"
 
+    case productionDesktop = "codex.db"
+    case productionDesktopWAL = "codex.db-wal"
+    case productionDesktopSHM = "codex.db-shm"
+    case productionDesktopJournal = "codex.db-journal"
+    case productionSummaries = "codex-thread-summaries.db"
+    case productionSummariesWAL = "codex-thread-summaries.db-wal"
+    case productionSummariesSHM = "codex-thread-summaries.db-shm"
+    case productionSummariesJournal = "codex-thread-summaries.db-journal"
+    case productionHistory = "codex-history-snapshots.db"
+    case productionHistoryWAL = "codex-history-snapshots.db-wal"
+    case productionHistorySHM = "codex-history-snapshots.db-shm"
+    case productionHistoryJournal = "codex-history-snapshots.db-journal"
+
+    static let legacyFiles = Array(allCases.prefix { $0 != .productionDesktop })
+    static let productionFiles = legacyFiles.map(\.productionMember)
+
+    var productionMember: Self {
+        switch self {
+        case .desktop: .productionDesktop
+        case .desktopWAL: .productionDesktopWAL
+        case .desktopSHM: .productionDesktopSHM
+        case .desktopJournal: .productionDesktopJournal
+        case .summaries: .productionSummaries
+        case .summariesWAL: .productionSummariesWAL
+        case .summariesSHM: .productionSummariesSHM
+        case .summariesJournal: .productionSummariesJournal
+        case .history: .productionHistory
+        case .historyWAL: .productionHistoryWAL
+        case .historySHM: .productionHistorySHM
+        case .historyJournal: .productionHistoryJournal
+        default: self
+        }
+    }
+
+    static func members(named names: [String]) -> [Self]? {
+        [legacyFiles, productionFiles].first { $0.map(\.rawValue) == names }
+    }
+
+    /// SQLite cannot have a usable optional database if only its sidecars exist.
+    static func validPresence(_ files: [(Self, Bool)]) -> Bool {
+        let present = Set(files.compactMap { $0.1 ? $0.0 : nil })
+        return files.allSatisfy { !$0.0.isRequiredDatabase || $0.1 }
+            && (present.contains(.productionSummaries)
+                || present.isDisjoint(with: [.productionSummariesWAL, .productionSummariesSHM, .productionSummariesJournal]))
+    }
+
     var isRequiredDatabase: Bool {
         switch self {
-        case .desktop, .summaries, .state, .threadHistory: true
+        case .desktop, .productionDesktop, .summaries, .state, .threadHistory: true
         default: false
         }
     }
@@ -220,12 +290,28 @@ enum CodexGhostRepairSnapshotCanonicalFile: String, CaseIterable, Sendable {
     /// inspection must not interpret SHM byte changes as source mutation.
     var isVolatileSharedMemory: Bool {
         switch self {
-        case .desktopSHM, .summariesSHM, .historySHM, .stateSHM,
+        case .desktopSHM, .summariesSHM, .historySHM, .productionDesktopSHM, .productionSummariesSHM, .productionHistorySHM, .stateSHM,
              .threadHistorySHM:
             true
         default:
             false
         }
+    }
+
+    /// ENOENT for the database and all sidecars is the only accepted absent state.
+    static func productionSummariesAbsent(at url: URL) throws -> Bool {
+        guard url.lastPathComponent == Self.productionSummaries.rawValue else { return false }
+        func missing(_ path: String) throws -> Bool {
+            var status = stat()
+            if lstat(path, &status) == 0 { return false }
+            guard errno == ENOENT else { throw CodexGhostRepairError.invalidDatabaseContract("Cannot inspect the production summaries store.") }
+            return true
+        }
+        guard try missing(url.path) else { return false }
+        for suffix in ["-wal", "-shm", "-journal"] where try !missing(url.path + suffix) {
+            throw CodexGhostRepairError.invalidDatabaseContract("Production summaries sidecars have no main database.")
+        }
+        return true
     }
 
     private var isCodexHomeFile: Bool {
@@ -453,7 +539,11 @@ struct CodexGhostRepairSnapshotCanonicalSource: Sendable {
     ) throws -> CodexGhostRepairSnapshotAnalysisCaptureMetadata {
         let roots = try validatedRoots()
         func metadata() throws -> [stat?] {
-            try profile.files.map { file in
+            if profile == .v166Production {
+                // Even a volatile SHM must have a main database before it can be omitted from the copy.
+                _ = try CodexGhostRepairSnapshotCanonicalFile.productionSummariesAbsent(at: roots.sqliteRootURL.appendingPathComponent(CodexGhostRepairSnapshotCanonicalFile.productionSummaries.rawValue))
+            }
+            return try profile.files.map { file in
                 var status = stat()
                 let path = file.sourceURL(codexHomeURL: roots.codexHomeURL,
                                           sqliteRootURL: roots.sqliteRootURL).path

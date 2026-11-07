@@ -30,6 +30,7 @@ public struct CodexGhostRepairSnapshotAnalysisIdentity:
     public let publicationReceiptHash: String
     public let observedRegularFileCount: Int
     public let actualPublishedBytes: UInt64
+    private let productionCatalog: Bool?
 
     public var pathRedacted: Bool { true }
     public var rawDatabaseContentsOpened: Int { 0 }
@@ -49,11 +50,11 @@ public struct CodexGhostRepairSnapshotAnalysisIdentity:
         manifestHash: String,
         publicationReceiptHash: String,
         observedRegularFileCount: Int,
-        actualPublishedBytes: UInt64
+        actualPublishedBytes: UInt64, productionCatalog: Bool? = nil
     ) throws {
-        let requiredFileCount =
-            CodexGhostRepairSnapshotCanonicalFile.allCases
-                .filter(\.isRequiredDatabase).count + 2
+        self.productionCatalog = productionCatalog
+        let members = productionCatalog == true ? CodexGhostRepairSnapshotCanonicalFile.productionFiles : CodexGhostRepairSnapshotCanonicalFile.legacyFiles
+        let requiredFileCount = members.filter(\.isRequiredDatabase).count + 2
         // Snapshot publication and the one-click bulk preparation flow both
         // admit up to ten bounded witness IDs. The identity readback must
         // preserve that same bound or a valid ten-witness Snapshot becomes
@@ -100,6 +101,7 @@ public struct CodexGhostRepairSnapshotAnalysisIdentity:
         case publicationReceiptHash
         case observedRegularFileCount
         case actualPublishedBytes
+        case productionCatalog
     }
 
     public init(from decoder: Decoder) throws {
@@ -157,7 +159,8 @@ public struct CodexGhostRepairSnapshotAnalysisIdentity:
             actualPublishedBytes: try values.decode(
                 UInt64.self,
                 forKey: .actualPublishedBytes
-            )
+            ),
+            productionCatalog: try values.decodeIfPresent(Bool.self, forKey: .productionCatalog)
         )
     }
 
@@ -271,7 +274,8 @@ actor CodexGhostRepairSnapshotPackagedAnalysisIdentityCoordinator:
                 manifestHash: published.manifestHash,
                 publicationReceiptHash: published.publicationReceiptHash,
                 observedRegularFileCount: evidence.observedFileNames.count,
-                actualPublishedBytes: published.actualBytes
+                actualPublishedBytes: published.actualBytes,
+                productionCatalog: evidence.observedFileNames.contains(CodexGhostRepairSnapshotCanonicalFile.productionDesktop.rawValue) ? true : nil
             )
             return .resolved(identity)
         } catch {

@@ -66,6 +66,7 @@ public actor CodexGlobalStateCleanup {
             .deletingLastPathComponent().appendingPathComponent("GlobalStateCleanup")
         let gate = CodexGhostRepairMacOSOperationalGateSource(configuration:
             CodexGhostRepairOperationalGateConfiguration(codexHomeURL: home,
+                productionCatalog: CodexCompatibilityDesktopApplication.installedUsesProductionCatalog,
                 backupVolumeProbeURL: home.deletingLastPathComponent()))
         return CodexGlobalStateCleanup(home: home, backupRoot: backup, exclusion: .production(), checkGate: {
             guard try await gate.ghostRepairExecutionGate().isClear else {
@@ -212,10 +213,20 @@ public actor CodexGlobalStateCleanup {
     }
 
     private func verifyAbsent(_ ids: [String]) throws {
-        for (name, query) in [
-            ("state_5.sqlite", "SELECT count(*) FROM threads WHERE id = ?"),
-            ("sqlite/codex-dev.db", "SELECT count(*) FROM local_thread_catalog WHERE host_id = 'local' AND thread_id = ?"),
-        ] {
+        // These settings are shared across Desktop channels. Every existing local catalog must agree.
+        let catalogs = try ["sqlite/codex.db", "sqlite/codex-dev.db"].filter { name in
+            let url = home.appendingPathComponent(name)
+            var status = stat()
+            if lstat(url.path, &status) == 0 { return true }
+            guard errno == ENOENT else { throw stop("Cannot inspect the Desktop catalog.") }
+            for suffix in ["-wal", "-shm", "-journal"] {
+                guard lstat(url.path + suffix, &status) != 0, errno == ENOENT else { throw stop("Desktop catalog has unresolved sidecars.") }
+            }
+            return false
+        }
+        guard !catalogs.isEmpty else { throw stop("Cannot verify the Desktop catalog.") }
+        let query = "SELECT count(*) FROM local_thread_catalog WHERE host_id = 'local' AND thread_id = ?"
+        for (name, query) in [("state_5.sqlite", "SELECT count(*) FROM threads WHERE id = ?")] + catalogs.map({ ($0, query) }) {
             let url = home.appendingPathComponent(name)
             try safePath(url)
             var db: OpaquePointer?

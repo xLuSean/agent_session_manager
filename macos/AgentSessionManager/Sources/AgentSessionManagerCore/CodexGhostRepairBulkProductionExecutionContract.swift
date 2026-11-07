@@ -196,20 +196,13 @@ struct CodexGhostRepairBulkExecutionBackupReceipt:
             files: files,
             capturedAtMilliseconds: capturedAtMilliseconds
         )
-        let expectedNames = CodexGhostRepairSnapshotCanonicalFile.allCases
-            .map(\.rawValue)
-        let requiredNames = Set(
-            CodexGhostRepairSnapshotCanonicalFile.allCases
-                .filter(\.isRequiredDatabase)
-                .map(\.rawValue)
-        )
         guard Self.isSHA256(planDigest),
               (1...CodexGhostRepairBulkPreview.maximumSelectedItems)
                 .contains(selectedThreadIDs.count),
               selectedThreadIDs == selectedThreadIDs.sorted(),
               Set(selectedThreadIDs).count == selectedThreadIDs.count,
               Self.isSHA256(sourceFingerprintHash),
-              files.map(\.fileName) == expectedNames,
+              let members = CodexGhostRepairSnapshotCanonicalFile.members(named: files.map(\.fileName)),
               files.allSatisfy({ file in
                   if file.present {
                       return (file.byteCount ?? 0) > 0
@@ -217,9 +210,7 @@ struct CodexGhostRepairBulkExecutionBackupReceipt:
                   }
                   return file.byteCount == nil && file.contentHash == nil
               }),
-              requiredNames.isSubset(of: Set(
-                  files.filter(\.present).map(\.fileName)
-              )),
+              CodexGhostRepairSnapshotCanonicalFile.validPresence(Array(zip(members, files.map(\.present)))),
               capturedAtMilliseconds >= 0,
               try CodexGhostRepairHasher.hash(payload) == receiptDigest,
               readbackVerified,

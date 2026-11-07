@@ -49,7 +49,7 @@ struct CodexGhostRepairSnapshotRequestBoundProfileSelection:
         if let desktopSchemaProfileIdentifier {
             let candidates: [CodexGhostRepairSnapshotSourceProfile] = [
                 .v149DesktopV32, .v151DesktopV33, .v152DesktopV34, .v153DesktopV34,
-                .v1534DesktopV34, .v156DesktopV34Extended, .v160DesktopV34Async,
+                .v1534DesktopV34, .v156DesktopV34Extended, .v160DesktopV34Async, .v166DesktopV34Realtime, .v166Production,
             ]
             return candidates.first {
                 $0.supports(runtimeVersion: runtimeVersion)
@@ -72,6 +72,8 @@ struct CodexGhostRepairSnapshotRequestBoundProfileSelection:
             .v156DesktopV34Extended
         case "0.153.4", "codex-cli 0.153.4":
             .v1534DesktopV34
+        case "0.164.0", "codex-cli 0.164.0", "0.166.0-alpha.5.1", "codex-cli 0.166.0-alpha.5.1":
+            .v166Production
         case "0.160.0", "codex-cli 0.160.0":
             .v160DesktopV34Async
         default:

@@ -29,11 +29,11 @@ actor CodexGhostRepairExperimentalAppServerObservationAdapter:
         let records = snapshot.active
             + snapshot.archived
             + snapshot.descendantRecords
-        let pinEvidenceConsistent = snapshot.desktopPinStateAvailable
+        let pinEvidenceConsistent = snapshot.protectedThreadInventoryComplete
             && records.allSatisfy { record in
                 guard let serverValue = record.isPinned else { return true }
                 return serverValue
-                    == snapshot.desktopPinnedThreadIDs.contains(record.id)
+                    == snapshot.protectedThreadIDs.contains(record.id)
             }
 
         return .init(
@@ -42,7 +42,7 @@ actor CodexGhostRepairExperimentalAppServerObservationAdapter:
             inventoryComplete: !snapshot.isTruncated,
             activeThreadIDs: snapshot.active.map(\.id),
             archivedThreadIDs: snapshot.archived.map(\.id),
-            pinnedThreadIDs: snapshot.desktopPinnedThreadIDs,
+            pinnedThreadIDs: snapshot.protectedThreadIDs,
             pinnedInventoryComplete: pinEvidenceConsistent,
             descendantNodes: snapshot.descendantRecords.map {
                 .init(

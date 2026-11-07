@@ -33,7 +33,7 @@ actor CodexGhostRepairBulkProductionMaintenanceObserver:
         return Self(
             profile: profile,
             gateSource: CodexGhostRepairSnapshotOperationalGateSource
-                .production(),
+                .production(profile: profile),
             fingerprintReader: { try source.fingerprint() },
             authorityReader: { resolution in
                 try Self.readAuthority(source: source, resolution: resolution)
@@ -100,6 +100,8 @@ actor CodexGhostRepairBulkProductionMaintenanceObserver:
         profile: CodexGhostRepairSnapshotSourceProfile
     ) -> String {
         switch profile.identifier {
+        case CodexGhostRepairSnapshotSourceProfile.v166DesktopV34Realtime.identifier, CodexGhostRepairSnapshotSourceProfile.v166Production.identifier:
+            "0.164.0"
         case CodexGhostRepairSnapshotSourceProfile.v160DesktopV34Async.identifier:
             "0.157.1"
         case CodexGhostRepairSnapshotSourceProfile.v156DesktopV34Extended.identifier:

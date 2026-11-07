@@ -635,7 +635,7 @@ final class CodexGhostRepairSnapshotPublishedInventoryTests: XCTestCase {
                 CodexGhostRepairSnapshotCanonicalSource.testMirrorMarkerFileName
             )
         )
-        for file in CodexGhostRepairSnapshotCanonicalFile.allCases
+        for file in CodexGhostRepairSnapshotCanonicalFile.legacyFiles
             where file.isRequiredDatabase {
             try PublishedInventoryWritePrivate(
                 Data("M1b-5 \(file.rawValue)\n".utf8),

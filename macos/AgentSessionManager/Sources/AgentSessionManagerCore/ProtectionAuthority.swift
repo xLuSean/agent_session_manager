@@ -14,6 +14,7 @@ public enum ProtectionAuthorityScope: String, Codable, Hashable, Sendable {
 public enum ProtectionAuthoritySource: String, Codable, Hashable, Sendable {
     case fixtureProvider
     case codexThreadListPin
+    case codexThreadSection
     case codexDesktopPinnedThreadIDs
     case codexThreadListStatus
     case codexCompleteDescendantGraph
@@ -139,7 +140,7 @@ public enum ProtectionAuthorityPolicy {
         switch observation.source {
         case .fixtureProvider:
             return false
-        case .codexThreadListPin:
+        case .codexThreadListPin, .codexThreadSection:
             return observation.kind == .pinned
                 && observation.scope == .providerPersistentState
         case .codexDesktopPinnedThreadIDs:

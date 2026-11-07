@@ -44,6 +44,12 @@ Size 欄顯示對話檔的邏輯大小，不包含專案、共用資料庫、備
 
 人工檢查不必刪對話：比較一筆對話在列表及詳細資訊的大小，再切換兩種大小排序，確認搜尋結果與勾選不變；切換專案、狀態或搜尋時，All sessions 總計應保持相同。清除搜尋後選 Recently updated 回到原本順序。
 
+### Codex 分區保護
+
+新版 Codex 的對話分區會顯示為 **Protected section**。ASM 保護所有已放入分區的對話，包含自訂分區；分區改名不影響保護。有受保護子對話的上層對話也不能封存或刪除。若要操作，先在 Codex 把對話移出分區，再回 ASM 重新整理。
+
+無法完整確認分區時，ASM 會顯示狀態不可用並阻擋操作，不會用舊置頂設定推定已解除保護。舊版 Codex 仍沿用原有置頂規則。
+
 ## 檢查 Codex 相容性
 
 ### 測試結果與功能可用性
@@ -117,6 +123,10 @@ ASM 的檢查規則更新也會讓舊結果失效。本次規則版本升至 4�
 
 上一批顯示 **Cleanup is complete** 後，按 **Close** 關閉結果即可重新選取下一批，不必重開 ASM 或執行 Plan Closure。確認下一批刪除時，ASM 會釋放已驗證成功的舊操作狀態，再檢查新預覽；不重送上一批刪除或清理。尚未完成、失敗或結果不明的清理仍會阻擋下一批，原操作紀錄保持不變。
 
+若 Codex 仍顯示舊標題，點開卻找不到對話，從 ASM 主畫面按 **Review Ghosts…**。在 **Bulk Ghost Delete** 核對並勾選要清除的項目，按 **Clear Selected Ghosts… → Confirm Cleanup**。依提示退出 Codex，保持 ASM 開啟，再按 **Codex Is Closed — Start Cleanup**。清理成功後重開 Codex，核對舊標題是否消失。
+
+使用 Codex Desktop `26.1027.61615 (24141)` 時，可在 **Settings → Compatibility** 核對正式版清單 `codex.db`。摘要庫顯示 **Not created by Desktop** 表示 Codex 尚未建立它。
+
 若整批部分失敗，保留逐筆結果；未執行、不明與失敗不能當作已刪除。Conflict 的接受原生狀態、重套 Trash 或確認外部刪除各有不同作用，必須依預覽說明，不以清單漏項直接確認刪除。
 
 ### 刪除失敗與 Fork History
@@ -182,7 +192,7 @@ Show 分類選單預設顯示 Needs attention，隱藏正常對話。可切換 E
 
 **Review additional cleanup** 預設關閉。一般模式保留剩餘的對話摘要，所以已確認的 Ghost 仍可能暫時不能勾選；只因這個原因保留的項目會顯示 **Needs summary review**，並說明下一步。
 
-開啟這個選項後，ASM 重新判斷摘要與支援的暫停自動化紀錄是否可清理。切換模式會清空選取，但不會刪除資料；需重新勾選符合資格的項目。每筆會列出將一併清理的摘要數，再依下方批次步驟核對範圍並確認。若仍顯示 Blocked，代表另有未通過的檢查，不能直接清理。
+開啟這個選項後，ASM 重新判斷摘要與支援的暫停自動化紀錄是否可清理。從一般 Ghost 清單進入時，切換模式會清空選取，請重新勾選符合資格的項目。每筆會列出將一併清理的摘要數，再依下方批次步驟核對範圍並確認。若仍顯示 Blocked，請查看該列的原因。
 
 它只放行已知、限定範圍的 session 摘要與受支援的暫停排程案例；列上會顯示待刪摘要數。可讀對話、本機仍有資料、證據不足、置頂、有子對話或其他不支援的關聯仍受保護，並非略過所有檢查。
 
@@ -233,6 +243,8 @@ Terminal outcome: success 必須涵蓋完整確認範圍。成功項目只留在
 清單讀取 ASM 保存的結果，不會自動掃描或清理 Codex。**Cleanup not yet checked** 代表尚無已驗證結果，不表示一定有殘留；結果不明與已完成會分開顯示。較早的刪除可按 **Load Earlier Deletions**。Report History 的原 Delete 報告頂端也保留 **Finish Cleanup…**。兩個入口都沿用原本成功刪除的範圍，不再送出 Delete；依畫面要求退出 Codex Desktop／CLI，讓 ASM 備份並清理剩餘資料。
 
 接續視窗 **Finish Conversation Cleanup** 會保留原本的對話選取，依序引導檢查、關閉 Codex、查看結果。檢查完成後按 **Continue Cleanup…** 確認；退出 Codex 並保持 ASM 開啟，再按 **Codex Is Closed — Start Cleanup**。不必重新搜尋或勾選 Ghost。若資料仍在更新，等工作結束後按 **Check Again**；尚未開始清理時可選 **Finish Later**，日後從主畫面的 **Continue Cleanup…** 接續。復原操作收在 **Advanced details and recovery**。
+
+如果 **Continue Cleanup…** 呈灰色，先看清單最上方的受阻項目。若有可額外檢視的摘要或暫停排程執行紀錄，請在第 2 步開啟 **Review additional cleanup**，核對會移除的摘要數及會封存的執行紀錄數。整批都通過後，按 **Continue Cleanup… → Confirm Cleanup** 才進入備份與清理流程。更新 ASM 後，可從 **Report History → 原刪除報告 → Finish Cleanup…** 重新檢查同一批。
 
 清理會移除該對話的本機目錄項目；若它來自自動化，會封存對應的執行紀錄並保留自動化定義與排程。完成後重新開啟 Codex，再確認該對話未重新出現。功能相容性的綠色表示這版 ASM 支援目前環境，個別清理結果仍以該次操作報告為準。
 

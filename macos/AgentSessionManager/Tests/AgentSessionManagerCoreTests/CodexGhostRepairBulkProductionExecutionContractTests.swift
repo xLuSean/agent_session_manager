@@ -720,7 +720,7 @@ final class CodexGhostRepairBulkProductionExecutionContractTests:
                 atPath: operationDirectory.path
             )),
             Set(
-                CodexGhostRepairSnapshotCanonicalFile.allCases.map(\.rawValue)
+                CodexGhostRepairSnapshotCanonicalFile.legacyFiles.map(\.rawValue)
                     + [CodexGhostRepairBulkOperationBoundBackupTransport
                         .manifestFileName]
             )
@@ -729,7 +729,7 @@ final class CodexGhostRepairBulkProductionExecutionContractTests:
         // A complete operation backup must cold-read from its own durable
         // bytes. Making every source unreadable proves the second call did not
         // reopen or recopy the source.
-        for file in CodexGhostRepairSnapshotCanonicalFile.allCases {
+        for file in CodexGhostRepairSnapshotCanonicalFile.legacyFiles {
             XCTAssertEqual(chmod(storage.sourceURL(file).path, 0o000), 0)
         }
         let second = try await transport.createOrReadExactBackup(
@@ -962,7 +962,7 @@ final class CodexGhostRepairBulkProductionExecutionContractTests:
             CodexGhostRepairSnapshotCanonicalSource.testMirrorMarkerContents.utf8
         ).write(to: sourceMarker)
         XCTAssertEqual(chmod(sourceMarker.path, 0o600), 0)
-        for (index, file) in CodexGhostRepairSnapshotCanonicalFile.allCases
+        for (index, file) in CodexGhostRepairSnapshotCanonicalFile.legacyFiles
             .enumerated() {
             let url = file.sourceURL(
                 codexHomeURL: codexHome,
@@ -1130,7 +1130,7 @@ final class CodexGhostRepairBulkProductionExecutionContractTests:
             plannedAtMilliseconds: 1_300
         )
         let preBackup = try maintenance(at: 1_350, fingerprint: hash(20))
-        let files = CodexGhostRepairSnapshotCanonicalFile.allCases.map {
+        let files = CodexGhostRepairSnapshotCanonicalFile.legacyFiles.map {
             CodexGhostRepairBulkExecutionBackupFile(
                 fileName: $0.rawValue,
                 present: true,

@@ -1130,6 +1130,68 @@ final class AgentSessionManagerCoreTests: XCTestCase {
         )
     }
 
+    func testModernSectionsProtectEveryAssignedConversationAndItsAncestors() throws {
+        let sectionID = "01900000-0000-7000-8000-000000000001"
+        var parent = makeCodexRecord(id: "parent", parentThreadID: nil, name: "Parent", isPinned: nil)
+        parent.sectionReadComplete = true
+        var child = makeCodexRecord(id: "child", parentThreadID: "parent", name: "Child", isPinned: nil)
+        child.sectionReadComplete = true
+        child.section = .init(id: sectionID, name: "Any custom section")
+        var renamed = child; renamed.section = .init(id: sectionID, name: "Renamed")
+        let snapshot = makeSnapshot(runtimeVersion: "0.164.0", active: [parent, child],
+            descendantRecords: [parent, renamed], descendantGraphComplete: true, desktopPinStateAvailable: true)
+        XCTAssertTrue(snapshot.protectedThreadInventoryComplete)
+        XCTAssertEqual(snapshot.protectedThreadIDs, ["child"])
+        let sessions = CodexAppServerProvider.map(snapshot: snapshot)
+        let mappedChild = try XCTUnwrap(sessions.first { $0.nativeID == "child" })
+        XCTAssertTrue(mappedChild.protection.isPinned)
+        XCTAssertTrue(mappedChild.protection.isPinnedKnown)
+        XCTAssertTrue(mappedChild.protection.blocksLifecycleMutation)
+        XCTAssertEqual(mappedChild.protection.pinLabel, "Protected section")
+        let mappedParent = try XCTUnwrap(sessions.first { $0.nativeID == "parent" })
+        XCTAssertFalse(mappedParent.protection.isPinned)
+        XCTAssertTrue(mappedParent.protection.hasPinnedDescendant)
+        XCTAssertTrue(mappedParent.protection.hasPinnedDescendantKnown)
+        XCTAssertTrue(mappedParent.protection.blocksLifecycleMutation)
+    }
+
+    func testModernMissingOrConflictingSectionIsUnknownAndCannotClearProtection() throws {
+        var record = makeCodexRecord(id: "thread", parentThreadID: nil, name: nil, isPinned: false)
+        let missing = makeSnapshot(runtimeVersion: "0.164.0", active: [record], desktopPinStateAvailable: true)
+        XCTAssertFalse(missing.protectedThreadInventoryComplete)
+        XCTAssertFalse(try XCTUnwrap(CodexAppServerProvider.map(snapshot: missing).first).protection.isPinnedKnown)
+        record.sectionReadComplete = true
+        let clear = makeSnapshot(runtimeVersion: "0.164.0", active: [record], desktopPinStateAvailable: true)
+        XCTAssertTrue(clear.protectedThreadInventoryComplete)
+        XCTAssertTrue(try XCTUnwrap(CodexAppServerProvider.map(snapshot: clear).first).protection.isPinnedKnown)
+        var assigned = record
+        assigned.section = .init(id: "01900000-0000-7000-8000-000000000001", name: "Section")
+        let conflicting = makeSnapshot(runtimeVersion: "0.164.0", active: [record], descendantRecords: [assigned], desktopPinStateAvailable: true)
+        XCTAssertFalse(conflicting.protectedThreadInventoryComplete)
+        XCTAssertEqual(conflicting.protectedThreadIDs, [record.id])
+        XCTAssertFalse(try XCTUnwrap(CodexAppServerProvider.map(snapshot: conflicting).first).protection.isPinnedKnown)
+        assigned.section = .init(id: "malformed", name: "Section")
+        XCTAssertFalse(makeSnapshot(runtimeVersion: "0.164.0", active: [assigned], desktopPinStateAvailable: true).protectedThreadInventoryComplete)
+    }
+
+    func testSectionDecodingDistinguishesNullFromMissingAndExplicitProjectWins() throws {
+        var record = makeCodexRecord(id: "thread", parentThreadID: nil, name: nil, isPinned: nil)
+        let oldData = try JSONEncoder().encode(record)
+        XCTAssertFalse(try JSONDecoder().decode(CodexThreadRecord.self, from: oldData).sectionReadComplete)
+        record.sectionReadComplete = true
+        record.projectId = "explicit"
+        let roundtrip = try JSONDecoder().decode(CodexThreadRecord.self, from: JSONEncoder().encode(record))
+        XCTAssertTrue(roundtrip.sectionReadComplete)
+        XCTAssertNil(roundtrip.section)
+        let projects: [CodexDesktopProject] = [
+            .init(id: "guess", name: "Same working folder", rootPaths: [record.cwd], order: 0),
+            .init(id: "explicit", name: "Assigned project", rootPaths: ["/tmp/elsewhere"], order: 1)]
+        let snapshot = makeSnapshot(active: [roundtrip], projects: projects, projectCatalogAvailable: true)
+        XCTAssertEqual(CodexAppServerProvider.map(snapshot: snapshot).first?.project?.id, "explicit")
+        record.projectId = "missing"
+        XCTAssertNil(CodexAppServerProvider.map(snapshot: makeSnapshot(active: [record], projects: projects, projectCatalogAvailable: true)).first?.project)
+    }
+
     private func makeCodexRecord(
         id: String,
         parentThreadID: String?,

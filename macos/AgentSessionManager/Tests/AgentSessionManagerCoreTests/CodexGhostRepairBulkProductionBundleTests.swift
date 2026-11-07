@@ -231,10 +231,10 @@ final class CodexGhostRepairBulkProductionBundleTests: XCTestCase {
         let fingerprint = try CodexGhostRepairSnapshotCanonicalFingerprint(
             profile: .v149DesktopV32,
             sourceRootDigest: hash(800_001),
-            files: CodexGhostRepairSnapshotCanonicalFile.allCases.map {
+            files: CodexGhostRepairSnapshotCanonicalFile.legacyFiles.map {
                 .init(
                     fileName: $0.rawValue,
-                    exists: false,
+                    exists: $0.isRequiredDatabase,
                     device: nil,
                     inode: nil,
                     mode: nil,

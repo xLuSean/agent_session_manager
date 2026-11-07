@@ -241,7 +241,8 @@ if [[ ! -f "$BULK_LIVE_BACKUP_TRANSPORT" ]] \
     || grep -nE '^public |CodexAppServerClient|SessionManagerModel|CSQLite3|sqlite3_|BEGIN|COMMIT|DELETE FROM|UPDATE |INSERT INTO|productionFactoryAcceptsCallerPath = true|overwritesExistingOperation = true|retriesPartialOperation = true|automaticRestoreAllowed = true|automaticCleanupAllowed = true|opensSQLite = true|createsClaim = true|appWiringAvailable = true|liveExecutionAuthorized = true|repairMutationAuthority = true' "$BULK_LIVE_BACKUP_TRANSPORT" \
     || grep -R -n 'CodexGhostRepairBulkLiveBackup' "$APP_SOURCE" \
     || ! grep -q 'static func production(' "$BULK_LIVE_BACKUP_TRANSPORT" \
-    || ! grep -q 'CodexGhostRepairSnapshotCanonicalFile.allCases' "$BULK_LIVE_BACKUP_TRANSPORT" \
+    || ! grep -q 'source.profile.files' "$BULK_LIVE_BACKUP_TRANSPORT" \
+    || ! grep -q 'CodexGhostRepairSnapshotCanonicalFile.members(named:' "$BULK_LIVE_BACKUP_TRANSPORT" \
     || ! grep -q 'static let destinationRecordFileName = "destination.json"' "$BULK_LIVE_BACKUP_TRANSPORT" \
     || ! grep -q 'static let receiptFileName = "receipt.json"' "$BULK_LIVE_BACKUP_TRANSPORT" \
     || ! grep -q 'O_WRONLY | O_CREAT | O_EXCL' "$BULK_LIVE_BACKUP_TRANSPORT" \
@@ -720,7 +721,7 @@ if [[ ! -f "$SNAPSHOT_QUARANTINE_PUBLISHER" ]] \
     || ! grep -q 'source: .production(profile: profile)' "$SNAPSHOT_QUARANTINE_PUBLISHER" \
     || ! grep -q 'func inspectAdmissionProfileBound(' "$SNAPSHOT_QUARANTINE_PUBLISHER" \
     || ! grep -q 'func acquireProfileBound(' "$SNAPSHOT_QUARANTINE_PUBLISHER" \
-    || ! grep -q 'CodexGhostRepairSnapshotOperationalGateSource.production()' "$SNAPSHOT_QUARANTINE_PUBLISHER" \
+    || ! grep -q 'CodexGhostRepairSnapshotOperationalGateSource.production(profile: profile)' "$SNAPSHOT_QUARANTINE_PUBLISHER" \
     || ! grep -q 'O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW' "$SNAPSHOT_QUARANTINE_PUBLISHER" \
     || ! grep -q 'Darwin.rename(quarantineRoot.path, publishedRoot.path)' "$SNAPSHOT_QUARANTINE_PUBLISHER" \
     || ! grep -q 'let writesCodexDatabaseFiles = false' "$SNAPSHOT_QUARANTINE_PUBLISHER" \
@@ -735,7 +736,7 @@ fi
 if [[ ! -f "$SNAPSHOT_OPERATIONAL_GATE_SOURCE" ]] \
     || head -n 8 "$SNAPSHOT_OPERATIONAL_GATE_SOURCE" | grep -q 'AGENT_SESSION_MANAGER_RESEARCH' \
     || grep -nE '^public |sqlite3_|O_WRONLY|O_RDWR|createDirectory|copyItem|moveItem|removeItem|mkdir\(|chmod\(|fchmod\(|unlink\(|rename\(' "$SNAPSHOT_OPERATIONAL_GATE_SOURCE" \
-    || ! grep -q 'static func production()' "$SNAPSHOT_OPERATIONAL_GATE_SOURCE" \
+    || ! grep -q 'static func production(profile: CodexGhostRepairSnapshotSourceProfile' "$SNAPSHOT_OPERATIONAL_GATE_SOURCE" \
     || ! grep -q 'FileManager.default.homeDirectoryForCurrentUser' "$SNAPSHOT_OPERATIONAL_GATE_SOURCE" \
     || ! grep -q 'for: \.applicationSupportDirectory' "$SNAPSHOT_OPERATIONAL_GATE_SOURCE" \
     || ! grep -q 'CodexGhostRepairDestinationCanaryFixedLayout.entries' "$SNAPSHOT_OPERATIONAL_GATE_SOURCE" \

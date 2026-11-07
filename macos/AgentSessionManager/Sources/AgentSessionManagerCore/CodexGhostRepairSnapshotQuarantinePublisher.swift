@@ -87,7 +87,7 @@ actor CodexGhostRepairSnapshotQuarantinePublisher {
     ) -> Self {
         production(
             gateSource:
-                CodexGhostRepairSnapshotOperationalGateSource.production(),
+                CodexGhostRepairSnapshotOperationalGateSource.production(profile: profile),
             profile: profile
         )
     }

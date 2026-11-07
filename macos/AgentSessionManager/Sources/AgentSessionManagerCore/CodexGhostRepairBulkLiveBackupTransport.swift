@@ -7,7 +7,7 @@ struct CodexGhostRepairBulkLiveBackupTransportCapabilities:
     Sendable
 {
     let fixedCanonicalFileCount =
-        CodexGhostRepairSnapshotCanonicalFile.allCases.count
+        CodexGhostRepairSnapshotCanonicalFile.legacyFiles.count
     let productionFactoryAvailable = true
     let productionConstructionPerformsIO = false
     let productionFactoryAcceptsCallerPath = false
@@ -118,16 +118,9 @@ struct CodexGhostRepairBulkLiveBackupReceipt:
             files: files,
             capturedAtMilliseconds: capturedAtMilliseconds
         )
-        let expectedNames =
-            CodexGhostRepairSnapshotCanonicalFile.allCases.map(\.rawValue)
-        guard formatVersion == Self.formatVersion,
-              files.map(\.fileName) == expectedNames,
-              files.count
-                == CodexGhostRepairSnapshotCanonicalFile.allCases.count,
-              zip(CodexGhostRepairSnapshotCanonicalFile.allCases, files)
-                .allSatisfy({ file, evidence in
-                    !file.isRequiredDatabase || evidence.present
-                }),
+        guard let members = CodexGhostRepairSnapshotCanonicalFile.members(named: files.map(\.fileName)),
+              formatVersion == Self.formatVersion,
+              CodexGhostRepairSnapshotCanonicalFile.validPresence(Array(zip(members, files.map(\.present)))),
               files.allSatisfy({ file in
                   if file.present {
                       return file.byteCount != nil
@@ -158,11 +151,12 @@ struct CodexGhostRepairBulkLiveBackupReceipt:
         in fingerprint: CodexGhostRepairSnapshotCanonicalFingerprint,
         excluding additionalFileNames: Set<String> = []
     ) -> String? {
-        guard fingerprint.files.count == files.count else {
+        guard let profile = CodexGhostRepairSnapshotSourceProfile.admitted(sourceLayoutIdentifier: fingerprint.sourceLayoutIdentifier),
+              fingerprint.files.count == files.count, profile.files.count == files.count else {
             return "canonical-member-set"
         }
         for (canonical, evidence) in zip(
-            CodexGhostRepairSnapshotCanonicalFile.allCases,
+            profile.files,
             zip(fingerprint.files, files)
         ) {
             let (observed, expected) = evidence
@@ -450,7 +444,7 @@ actor CodexGhostRepairBulkLiveBackupEnvironment:
 
         var copied = 0
         for (file, evidence) in zip(
-            CodexGhostRepairSnapshotCanonicalFile.allCases,
+            source.profile.files,
             fingerprint.files
         ) where evidence.exists {
             try copy(

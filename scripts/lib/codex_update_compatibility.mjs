@@ -14,6 +14,8 @@ export const AUDITED_GHOST_REPAIR_RUNTIME_PROFILES = Object.freeze({
   "0.157.1": "desktop-v34-extended",
   "0.158.0-alpha.2.1": "desktop-v34-extended",
   "0.160.0": "desktop-v34-async",
+  "0.166.0-alpha.5.1": "desktop-v34-production",
+  "0.164.0": "desktop-v34-production",
 });
 
 // Metadata observed by the explicit read-only update audit on 2026-08-31.
@@ -296,6 +298,25 @@ export const GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC = Object.freeze({
   mutationAuthority: "none",
 });
 
+const asyncDatabases = GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC.databases;
+export const GHOST_REPAIR_DATABASE_CONTRACT_V166_PRODUCTION = Object.freeze({
+  identifier: "desktop-v34-production",
+  databases: {
+    ...asyncDatabases,
+    desktop: { ...asyncDatabases.desktop, fileName: "codex.db", tables: {
+      ...asyncDatabases.desktop.tables,
+      active_chat_turns: { exact: true, columns: ["profile", "account_id", "user_id", "thread_id", "launch_id", "observed_at_ms"] },
+    } },
+    summaries: { ...asyncDatabases.summaries, fileName: "codex-thread-summaries.db", optional: true },
+    threadHistory: { ...asyncDatabases.threadHistory, tables: {
+      ...asyncDatabases.threadHistory.tables,
+      thread_turns: { exact: true, columns: [...asyncDatabases.threadHistory.tables.thread_turns.columns, "root_turn_id"] },
+      thread_realtime_items: { exact: true, columns: ["thread_id", "item_id", "rollout_ordinal", "created_at_ms", "item_type", "item_json"] },
+    } },
+  },
+  mutationAuthority: "none",
+});
+
 export function versionsDiverge(left, right) {
   return Boolean(left && right && left !== right);
 }
@@ -315,7 +336,10 @@ export function evaluateGhostRepairContract({ runtimeVersion, databases }) {
   let inspectionUnavailable = false;
 
   const desktopUserVersion = databases?.desktop?.userVersion;
-  const candidates = [...GHOST_REPAIR_DATABASE_CONTRACTS, GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED, GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC].filter(
+  const applicable = databases?.desktop?.fileName === "codex.db"
+    ? [GHOST_REPAIR_DATABASE_CONTRACT_V166_PRODUCTION]
+    : [...GHOST_REPAIR_DATABASE_CONTRACTS, GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED, GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC];
+  const candidates = applicable.filter(
     (candidate) =>
       candidate.databases.desktop.userVersion === desktopUserVersion,
   );
@@ -345,6 +369,7 @@ export function evaluateGhostRepairContract({ runtimeVersion, databases }) {
         `${role}: expected file ${expected.fileName}, observed ${actual.fileName}`,
       );
     }
+    if (expected.optional && actual.absent === true) continue;
     if (actual.userVersion !== expected.userVersion) {
       drifts.push(
         `${role}: expected user_version ${expected.userVersion}, observed ${actual.userVersion}`,

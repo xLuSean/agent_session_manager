@@ -83,10 +83,13 @@ public struct CodexGhostRepairSnapshotAnalysisReferenceCounts:
     public let threadTurns: Int
     public let threadItems: Int
     public let historyProjection: Int
+    /// Nil for historical evidence, preserving its persisted encoding and hash.
+    public var realtimeItems: Int? = nil
+    public var activeChatTurns: Int? = nil
 
     public var total: Int {
         inbox + timeline + summaries + canonicalState + threadTurns
-            + threadItems + historyProjection
+            + threadItems + historyProjection + (realtimeItems ?? 0) + (activeChatTurns ?? 0)
     }
 }
 
@@ -739,6 +742,7 @@ public enum CodexGhostRepairSnapshotAnalysisReaderFactory {
 
 enum CodexGhostRepairSnapshotAnalysisAuthorizer {
     private static let allowedTables: Set<String> = [
+        "active_chat_turns",
         "local_thread_catalog",
         "automation_runs",
         "automations",
@@ -751,6 +755,8 @@ enum CodexGhostRepairSnapshotAnalysisAuthorizer {
         "thread_turns",
         "thread_items",
         "thread_history_projection_state",
+        "thread_realtime_items",
+        "sqlite_master",
     ]
 
     private static let allowedIndexes: Set<String> = [
@@ -780,7 +786,7 @@ enum CodexGhostRepairSnapshotAnalysisAuthorizer {
                 .compactMap { $0?.lowercased() }
                 .contains("count") ? SQLITE_OK : SQLITE_DENY
         case SQLITE_PRAGMA:
-            if ["table_info", "index_list"].contains(
+            if ["table_info", "table_xinfo", "foreign_key_list", "index_list"].contains(
                 parameterOne?.lowercased() ?? ""
             ) {
                 return parameterTwo.map(allowedTables.contains) == true
@@ -796,6 +802,7 @@ enum CodexGhostRepairSnapshotAnalysisAuthorizer {
                 "user_version",
                 "integrity_check",
                 "foreign_key_check",
+                "table_list",
             ].contains(parameterOne?.lowercased() ?? "")
                 ? SQLITE_OK : SQLITE_DENY
         default:
@@ -1008,6 +1015,8 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         case threadTurns
         case threadItems
         case historyProjection
+        case threadRealtimeItems
+        case activeChatTurns
     }
 
     static func verifyPrepublicationCopy(
@@ -1464,7 +1473,9 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         ] = [:]
         do {
             for database in CodexGhostRepairSnapshotAnalysisDatabase.allCases {
-                let canonical = database.canonicalFile
+                let production = observations[CodexGhostRepairSnapshotCanonicalFile.productionDesktop.rawValue] != nil
+                let canonical = production ? database.canonicalFile.productionMember : database.canonicalFile
+                if canonical == .productionSummaries && observations[canonical.rawValue] == nil { continue }
                 connections[database] = try diagnosed(
                     openFailurePoint(for: database)
                 ) {
@@ -1486,12 +1497,15 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             }
 
             guard let desktop = connections[.desktop],
-                  let profile = try desktop.exactDesktopProfile() else {
+                  let desktopProfile = try desktop.exactDesktopProfile(),
+                  let history = connections[.threadHistory] else {
                 throw DiagnosticFailure(point: .desktopContract)
             }
+            let profile = CodexGhostRepairDatabaseSchemaProfile.combining(desktopProfile,
+                realtimeHistory: try history.hasRealtimeHistory())
 
             let databases = try CodexGhostRepairSnapshotAnalysisDatabase
-                .allCases.map { database in
+                .allCases.filter { connections[$0] != nil }.map { database in
                     try diagnosed(contractFailurePoint(for: database)) {
                         guard let connection = connections[database] else {
                             throw CodexGhostRepairError.invalidDatabaseContract(
@@ -1515,7 +1529,6 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
 
             let targets = try diagnosed(.targetEvidence) {
                 guard let desktop = connections[.desktop],
-                      let summaries = connections[.summaries],
                       let state = connections[.state],
                       let history = connections[.threadHistory] else {
                     throw CodexGhostRepairError.invalidDatabaseContract(
@@ -1535,7 +1548,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
                     try targetEvidence(
                         threadID: threadID,
                         desktop: desktop,
-                        summaries: summaries,
+                        summaries: connections[.summaries],
                         state: state,
                         history: history
                     )
@@ -1580,7 +1593,9 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         ] = [:]
         do {
             for database in CodexGhostRepairSnapshotAnalysisDatabase.allCases {
-                let canonical = database.canonicalFile
+                let production = observations[CodexGhostRepairSnapshotCanonicalFile.productionDesktop.rawValue] != nil
+                let canonical = production ? database.canonicalFile.productionMember : database.canonicalFile
+                if canonical == .productionSummaries && observations[canonical.rawValue] == nil { continue }
                 connections[database] = try diagnosed(
                     openFailurePoint(for: database)
                 ) {
@@ -1602,12 +1617,15 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             }
 
             guard let desktop = connections[.desktop],
-                  let profile = try desktop.exactDesktopProfile() else {
+                  let desktopProfile = try desktop.exactDesktopProfile(),
+                  let history = connections[.threadHistory] else {
                 throw DiagnosticFailure(point: .desktopContract)
             }
+            let profile = CodexGhostRepairDatabaseSchemaProfile.combining(desktopProfile,
+                realtimeHistory: try history.hasRealtimeHistory())
 
             let databases = try CodexGhostRepairSnapshotAnalysisDatabase
-                .allCases.map { database in
+                .allCases.filter { connections[$0] != nil }.map { database in
                     try diagnosed(contractFailurePoint(for: database)) {
                         guard let connection = connections[database] else {
                             throw CodexGhostRepairError.invalidDatabaseContract(
@@ -1698,7 +1716,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
     private static func targetEvidence(
         threadID: String,
         desktop: QueryOnlySQLite,
-        summaries: QueryOnlySQLite,
+        summaries: QueryOnlySQLite?,
         state: QueryOnlySQLite,
         history: QueryOnlySQLite
     ) throws -> CodexGhostRepairSnapshotAnalysisTargetEvidence {
@@ -1741,10 +1759,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
                 .timeline,
                 threadID: threadID
             ),
-            summaries: try summaries.referenceCount(
-                .summaries,
-                threadID: threadID
-            ),
+            summaries: try summaries?.referenceCount(.summaries, threadID: threadID) ?? 0,
             canonicalState: try state.referenceCount(
                 .canonicalState,
                 threadID: threadID
@@ -1760,7 +1775,10 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             historyProjection: try history.referenceCount(
                 .historyProjection,
                 threadID: threadID
-            )
+            ),
+            realtimeItems: history.realtimeHistoryValidated
+                ? try history.referenceCount(.threadRealtimeItems, threadID: threadID) : nil,
+            activeChatTurns: desktop.validatedActiveChatTurns ? try desktop.referenceCount(.activeChatTurns, threadID: threadID) : nil
         )
         let rowContract = targetRowContract(
             threadID: threadID,
@@ -1796,7 +1814,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             return trimmed.isEmpty ? nil : String(trimmed.prefix(512))
         }.first
         // Summary content leaves this reader only as hashes; titles stay in memory.
-        if references.summaries > 0 && references.summaries <= 100 {
+        if let summaries, references.summaries > 0 && references.summaries <= 100 {
             result.summaryRowDigests = try summaries.query(
                 .summaryRows, bindings: [.text(threadID)], maximumRows: 100
             ).map { try CodexGhostRepairHasher.hash($0) }.sorted()
@@ -2035,7 +2053,8 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         let existing = Set(files.filter(\.exists).map(\.fileName))
         return Set(CodexGhostRepairSnapshotAnalysisDatabase.allCases.compactMap {
             database in
-            let main = database.canonicalFile.rawValue
+            let main = (existing.contains(CodexGhostRepairSnapshotCanonicalFile.productionDesktop.rawValue)
+                ? database.canonicalFile.productionMember : database.canonicalFile).rawValue
             let wal = main + "-wal"
             let sharedMemory = main + "-shm"
             guard existing.contains(main),
@@ -2267,6 +2286,24 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
     }
 
     private final class QueryOnlySQLite {
+        private(set) var realtimeHistoryValidated = false
+
+        func hasRealtimeHistory() throws -> Bool {
+            try CodexThreadHistoryContract.isPresent(rows: historyMetadata)
+        }
+
+        private func historyMetadata(_ statement: CodexThreadHistoryContract.Query) throws -> [[String?]] {
+            try query(.historyMetadata(statement), maximumRows: 1_024).map { row in
+                try row.fields.map { field in
+                    switch field.value {
+                    case .null: return nil
+                    case let .text(value): return value
+                    case let .integer(value): return String(value)
+                    default: throw CodexGhostRepairError.invalidDatabaseContract("Invalid history metadata.")
+                    }
+                }
+            }
+        }
         private var database: OpaquePointer?
         private var guardDescriptor: Int32 = -1
         private let url: URL
@@ -2374,12 +2411,15 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             return Int32(value)
         }
 
+        private(set) var validatedActiveChatTurns = false
+
         func exactDesktopProfile() throws -> CodexGhostRepairDatabaseSchemaProfile? {
             let version = try schemaVersion()
             for profile in CodexGhostRepairDatabaseSchemaProfile.admittedProfiles
                 where profile.databaseVersions[.desktop] == version {
                 do {
                     try validateDesktopContract(profile.desktopTables)
+                    validatedActiveChatTurns = profile == .desktopV34Production
                     return profile
                 } catch { continue }
             }
@@ -2399,6 +2439,18 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
             if database == .desktop {
                 try validateDesktopContract(profile.desktopTables)
                 return
+            }
+            if database == .threadHistory {
+                guard try hasRealtimeHistory() == profile.realtimeHistoryRequired else {
+                    throw CodexGhostRepairError.invalidDatabaseContract("History profile changed.")
+                }
+                if profile.realtimeHistoryRequired {
+                    guard try CodexThreadHistoryContract.validate(rows: historyMetadata) == nil else {
+                        throw CodexGhostRepairError.invalidDatabaseContract("Rooted/realtime history contract changed.")
+                    }
+                    realtimeHistoryValidated = true
+                    return
+                }
             }
             guard let contracts = CodexGhostRepairReferencedTables.byDatabase[database] else {
                 throw CodexGhostRepairError.invalidDatabaseContract(
@@ -2727,6 +2779,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
         }
 
         enum Statement {
+            case historyMetadata(CodexThreadHistoryContract.Query)
             case queryOnly
             case schemaVersion
             case integrityCheck
@@ -2745,6 +2798,7 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
 
             var sql: String {
                 switch self {
+                case let .historyMetadata(query): query.sql
                 case .queryOnly: "PRAGMA query_only"
                 case .schemaVersion: "PRAGMA user_version"
                 case .integrityCheck: "PRAGMA integrity_check"
@@ -2778,6 +2832,10 @@ private enum CodexGhostRepairSnapshotQueryOnlyBundle {
                         "SELECT count(*) AS count FROM thread_items WHERE thread_id = ?"
                     case .historyProjection:
                         "SELECT count(*) AS count FROM thread_history_projection_state WHERE thread_id = ?"
+                    case .activeChatTurns:
+                        "SELECT count(*) AS count FROM active_chat_turns WHERE thread_id = ?"
+                    case .threadRealtimeItems:
+                        "SELECT count(*) AS count FROM thread_realtime_items WHERE thread_id = ?"
                     }
                 case .metadata:
                     "SELECT * FROM local_thread_catalog_metadata WHERE id = 1"

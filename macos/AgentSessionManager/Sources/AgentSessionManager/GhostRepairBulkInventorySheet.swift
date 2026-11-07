@@ -1127,12 +1127,23 @@ struct GhostRepairBulkInventorySheet: View {
     }
 
     private var manualCleanupScope: String {
-        let items = model.ghostRepairBulkInventory?.items.filter {
-            cleanupSelection.contains($0.threadID) && $0.reviewedResidue != nil
-        } ?? []
-        guard !items.isEmpty else { return "" }
-        let summaries = items.reduce(0) { $0 + ($1.reviewedResidue?.summaryRowDigests.count ?? 0) }
-        return " MANUAL REVIEW: This also deletes \(summaries) summary record(s) belonging only to \(items.count) selected session(s). Automation definitions are NOT deleted or changed."
+        let records = model.ghostRepairBulkInventory?.items.filter {
+            cleanupSelection.contains($0.threadID)
+        }.compactMap(\.reviewedResidue) ?? []
+        return records.isEmpty ? "" : "\n\nMANUAL REVIEW\n" + additionalCleanupEffects(records)
+    }
+
+    private func additionalCleanupEffects(_ records: [CodexGhostRepairReviewedSessionResidue]) -> String {
+        let summaries = records.reduce(0) { $0 + $1.summaryRowDigests.count }
+        let runs = records.count { $0.pausedAutomation }
+        var effects: [String] = []
+        if summaries > 0 {
+            effects.append("\(summaries) conversation \(summaries == 1 ? "summary" : "summaries") will be removed.")
+        }
+        if runs > 0 {
+            effects.append("\(runs) \(runs == 1 ? "run" : "runs") from paused automations will be archived.")
+        }
+        return effects.joined(separator: " ")
     }
 
     private var shutdownContinuationTitle: String {
@@ -1153,7 +1164,8 @@ struct GhostRepairBulkInventorySheet: View {
                     }
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 5) {
-                            ForEach(model.nativeDeleteDesktopCleanupTargets) { target in
+                            let targets = model.nativeDeleteDesktopCleanupTargets
+                            ForEach(targets.filter { $0.state == .blocked } + targets.filter { $0.state != .blocked }) { target in
                                 HStack(alignment: .top, spacing: 8) {
                                     Image(
                                         systemName: desktopCleanupSymbol(
@@ -1166,7 +1178,14 @@ struct GhostRepairBulkInventorySheet: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         sessionIdentity(threadID: target.nativeSessionID)
                                         HStack(spacing: 8) {
-                                            Text(target.message)
+                                            if let records = target.additionalCleanup {
+                                                let prefix = target.state == .blocked ? "Additional review required. " : ""
+                                                Text(prefix + additionalCleanupEffects([records]))
+                                            } else if !target.blockers.isEmpty {
+                                                Text(target.blockers.map(blockerLabel).joined(separator: " · "))
+                                            } else {
+                                                Text(target.message)
+                                            }
                                         }
                                         .foregroundStyle(.secondary)
                                     }
@@ -1284,7 +1303,21 @@ struct GhostRepairBulkInventorySheet: View {
                    model.nativeDeleteDesktopAbsenceVerifiedReportID == nil {
                     GroupBox("2. Continue cleanup") {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("The conversations above stay selected. Continue, then quit Codex when prompted. ASM will check a backup before clearing their remaining records.")
+                            if model.canReviewNativeDeleteAdditionalCleanup {
+                                Toggle("Review additional cleanup", isOn: Binding(
+                                    get: { inventory.manualReviewEnabled },
+                                    set: { model.setGhostRepairManualReviewEnabled($0) }
+                                ))
+                                .disabled(isBusy || isSavingPreview)
+                                .accessibilityIdentifier("reviewDeletedConversationResidue")
+                                let records = model.nativeDeleteDesktopCleanupTargets.compactMap(\.additionalCleanup)
+                                Text("If you confirm cleanup for this deletion, " + additionalCleanupEffects(records)
+                                    + " Automation settings and schedules are kept.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
+                            Text(model.canContinueNativeDeleteDesktopCleanup
+                                ? "Continue with all \(model.ghostRepairBulkSelection.count) deleted conversations, then quit Codex when prompted. ASM will verify a backup first."
+                                : "Check the items marked above. Continue becomes available when every conversation in this deletion passes.")
                             Button("Continue Cleanup…", role: .destructive) {
                                 cleanupSelection = model.ghostRepairBulkSelection
                                 cleanupInventoryDigest = inventory.inventoryDigest
@@ -1887,7 +1920,7 @@ struct GhostRepairBulkInventorySheet: View {
         case .exactReadPresent: "Exact read succeeded; this session will not be cleared"
         case .exactReadUnavailable: "Exact-read absence could not be verified"
         case .exactReadContractMismatch: "Exact read format changed"
-        case .pinned: "Pinned"
+        case .pinned: "Pinned or in a protected section"
         case .descendantsPresent: "Has child sessions"
         case .unsupportedRowShape: "Automation or catalog state is outside the supported cleanup policy"
         case .sideReferencesPresent: "Related records still exist"

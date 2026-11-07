@@ -405,7 +405,10 @@ actor CodexGhostRepairBulkProductionMutator:
                 "M4f target row multiplicity exceeded one."
             )
         }
-        let references = try count(
+        // Realtime rows also protect the target during the final transaction/readback.
+        let hasRealtime = try !history.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'thread_realtime_items'", maximumRows: 1).isEmpty
+        let realtimeReferences = try hasRealtime ? count(history, "SELECT count(*) FROM thread_realtime_items WHERE thread_id = ?", frozen.threadID) : 0
+        let references = realtimeReferences + (try count(
             desktop, "SELECT count(*) FROM inbox_items WHERE thread_id = ?",
             frozen.threadID
         ) + count(
@@ -430,7 +433,7 @@ actor CodexGhostRepairBulkProductionMutator:
             "SELECT count(*) FROM thread_history_projection_state "
                 + "WHERE thread_id = ?",
             frozen.threadID
-        )
+        ))
         let catalogRow = catalog.first
         let automationRow = automation.first
         let definitionRow = definitions.first

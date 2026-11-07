@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "evidenceKey": "V166-PRODUCTION-CATALOG",
+  "sourceObservedAt": "2026-11-03T05:49:14+00:00",
+  "runtimeEvidenceFile": "current-v166-read-only-evidence.json",
+  "runtimeEvidenceSHA256": "830ef5b6389b6bbda07d3ca14db736636676a4b340c84abcf69608708fdfcb2c",
+  "layoutDigestEncoding": "SHA-256 of sorted-key compact JSON for ordered logicalRoot, fileName and requiredDatabase fields",
+  "desktopApp": {
+    "name": "ChatGPT.app",
+    "version": "26.1027.61615",
+    "build": "24141"
+  },
+  "sourceLayout": {
+    "identifier": "codex-cli-0.166.0-alpha.5.1-production-catalog-v1",
+    "sourceOwner": "desktop-bundled-0.166.0-alpha.5.1",
+    "runtimeProfileIdentifier": "desktop-bundled-0.166.0-alpha.5.1",
+    "desktopSchemaProfile": "desktop-v34-production",
+    "memberCount": 20,
+    "layoutDigest": "fe9e336c66f3ad540ff4d74b93131de007df6ef9a14d206bc61dad36c30088da",
+    "members": [
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex.db",
+        "requiredDatabase": true,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex.db-wal",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex.db-shm",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex.db-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-thread-summaries.db",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-thread-summaries.db-wal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-thread-summaries.db-shm",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-thread-summaries.db-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-history-snapshots.db",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-history-snapshots.db-wal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-history-snapshots.db-shm",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "sqlite",
+        "fileName": "codex-history-snapshots.db-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "state_5.sqlite",
+        "requiredDatabase": true,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "state_5.sqlite-wal",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "state_5.sqlite-shm",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "state_5.sqlite-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "thread_history_1.sqlite",
+        "requiredDatabase": true,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "thread_history_1.sqlite-wal",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "thread_history_1.sqlite-shm",
+        "requiredDatabase": false,
+        "exists": true,
+        "regularFile": true
+      },
+      {
+        "logicalRoot": "codex_home",
+        "fileName": "thread_history_1.sqlite-journal",
+        "requiredDatabase": false,
+        "exists": false,
+        "regularFile": false
+      }
+    ],
+    "allRequiredDatabaseFilesRegular": true,
+    "clearSourcePathPersisted": false,
+    "rawDatabaseContentsRead": false,
+    "sqliteAPICalls": 0,
+    "filesystemWrites": 0
+  }
+}

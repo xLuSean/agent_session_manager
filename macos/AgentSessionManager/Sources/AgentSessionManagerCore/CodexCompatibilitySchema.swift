@@ -7,7 +7,7 @@ struct CodexCompatibilitySchema {
     let restore: Bool
     let delete: Bool
 
-    static func read(directory: URL) throws -> Self {
+    static func read(directory: URL, requiresSections: Bool = false) throws -> Self {
         func document(_ name: String) -> [String: Any] {
             let url = directory.appendingPathComponent("v2/\(name).json")
             guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isSymbolicLinkKey]),
@@ -31,7 +31,7 @@ struct CodexCompatibilitySchema {
             if restores {
                 return Set(properties.keys) == ["thread"] && response["required"] as? [String] == ["thread"]
                     && properties["thread"]?["$ref"] as? String == "#/definitions/Thread"
-                    && threadDecoder(response)
+                    && threadDecoder(response, requiresSections: requiresSections)
             }
             return properties.isEmpty && (response["required"] as? [String] ?? []).isEmpty
         }
@@ -40,7 +40,7 @@ struct CodexCompatibilitySchema {
         let read = document("ThreadReadResponse")
         let properties = list["properties"] as? [String: [String: Any]] ?? [:]
         let readProperties = read["properties"] as? [String: [String: Any]] ?? [:]
-        let browsing = threadDecoder(list) && threadDecoder(read)
+        let browsing = threadDecoder(list, requiresSections: requiresSections) && threadDecoder(read, requiresSections: requiresSections)
             && properties["data"]?["type"] as? String == "array"
             && (properties["data"]?["items"] as? [String: Any])?["$ref"] as? String == "#/definitions/Thread"
             && readProperties["thread"]?["$ref"] as? String == "#/definitions/Thread"
@@ -49,7 +49,7 @@ struct CodexCompatibilitySchema {
                      restore: lifecycle("ThreadUnarchive", restores: true), delete: lifecycle("ThreadDelete"))
     }
 
-    static func threadDecoder(_ document: [String: Any]) -> Bool {
+    static func threadDecoder(_ document: [String: Any], requiresSections: Bool = false) -> Bool {
         let definitions = document["definitions"] as? [String: [String: Any]] ?? [:]
         let thread = definitions["Thread"] ?? [:]
         let properties = thread["properties"] as? [String: [String: Any]] ?? [:]
@@ -61,8 +61,20 @@ struct CodexCompatibilitySchema {
               (properties["status"]?["allOf"] as? [[String: String]])?.first?["$ref"] == "#/definitions/ThreadStatus",
               (properties["cwd"]?["allOf"] as? [[String: String]])?.first?["$ref"] == "#/definitions/AbsolutePathBuf",
               let statuses = definitions["ThreadStatus"]?["oneOf"] as? [[String: Any]], !statuses.isEmpty else { return false }
-        for key in ["parentThreadId", "forkedFromId", "name"] where properties[key] != nil {
+        for key in ["parentThreadId", "forkedFromId", "name", "projectId"] where properties[key] != nil {
             guard Set(properties[key]?["type"] as? [String] ?? []) == ["string", "null"] else { return false }
+        }
+        if requiresSections || properties["section"] != nil {
+            let alternatives = properties["section"]?["anyOf"] as? [[String: String]] ?? []
+            let section = definitions["ThreadSection"] ?? [:]
+            let fields = section["properties"] as? [String: [String: Any]] ?? [:]
+            guard alternatives.count == 2,
+                  alternatives.contains(["$ref": "#/definitions/ThreadSection"]),
+                  alternatives.contains(["type": "null"]),
+                  section["type"] as? String == "object",
+                  Set(section["required"] as? [String] ?? []).isSuperset(of: ["id", "name"]),
+                  fields["id"]?["type"] as? String == "string",
+                  fields["name"]?["type"] as? String == "string" else { return false }
         }
         return statuses.allSatisfy {
             ($0["required"] as? [String] ?? []).contains("type")
@@ -155,7 +167,7 @@ enum CodexCompatibilityDatabase {
         }
         let schema = try rows("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")
         let fingerprint = CodexCompatibilityInspector.hash(try JSONEncoder().encode(versions + schema))
-        let kind = CodexGhostRepairSnapshotAnalysisDatabase.allCases.first { $0.canonicalFile.rawValue == url.lastPathComponent }
+        let kind = CodexGhostRepairSnapshotAnalysisDatabase.allCases.first { $0.canonicalFile.rawValue == url.lastPathComponent || $0.canonicalFile.productionMember.rawValue == url.lastPathComponent }
         let inspection = try kind.map { try CodexCompatibilityDatabaseContract.inspect(database: $0, version: version, rows: rows) }
         var check = kind.map { CodexCompatibilityDatabaseCheck(database: $0, issue: inspection?.issue) }
         check?.inspectionOnly = inspection?.inspectionOnly
@@ -170,14 +182,28 @@ enum CodexCompatibilityDatabase {
 /// Keep filesystem access outside the pure request/profile binding.
 enum CodexGhostRepairInstalledSourceProfileReader {
     static func read(exactRuntimeVersion: String) throws -> CodexGhostRepairSnapshotSourceProfile? {
-        let database = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/sqlite/codex-dev.db")
-        return try read(exactRuntimeVersion: exactRuntimeVersion, databaseURL: database)
+        let home = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        let production = CodexCompatibilityDesktopApplication.installedUsesProductionCatalog
+        guard production == CodexGhostRepairSnapshotSourceProfile.v166Production.supports(runtimeVersion: exactRuntimeVersion) else { return nil }
+        let file: CodexGhostRepairSnapshotCanonicalFile = production ? .productionDesktop : .desktop
+        return try read(exactRuntimeVersion: exactRuntimeVersion,
+                        databaseURL: file.sourceURL(codexHomeURL: home, sqliteRootURL: home.appendingPathComponent("sqlite")))
     }
 
     static func read(exactRuntimeVersion: String, databaseURL: URL) throws -> CodexGhostRepairSnapshotSourceProfile? {
         guard CodexGhostRepairPackagedReadOnlyProfileCatalog.supportsObservationRuntime(exactRuntimeVersion) else { return nil }
-        guard let schema = try CodexCompatibilityDatabase.metadata(at: databaseURL).desktopProfile else { return nil }
+        guard var schema = try CodexCompatibilityDatabase.metadata(at: databaseURL).desktopProfile else { return nil }
+        let production = databaseURL.lastPathComponent == CodexGhostRepairSnapshotCanonicalFile.productionDesktop.rawValue
+        guard production == (schema == CodexGhostRepairDatabaseSchemaProfile.desktopV34Production.identifier) else { return nil }
+        if (schema == CodexGhostRepairDatabaseSchemaProfile.desktopV34Async.identifier || production),
+           CodexModernThreadMetadata.required(runtimeVersion: exactRuntimeVersion) {
+            let history = databaseURL.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("thread_history_1.sqlite")
+            let metadata = try CodexCompatibilityDatabase.metadata(at: history)
+            guard metadata.check?.issue == nil,
+                  metadata.check?.schemaProfileIdentifier == CodexThreadHistoryContract.profileIdentifier else { return nil }
+            if !production { schema = CodexGhostRepairDatabaseSchemaProfile.desktopV34Realtime.identifier }
+        }
         return CodexGhostRepairSnapshotRequestBoundProfileSelection.selectProfile(
             exactRuntimeVersion: exactRuntimeVersion, desktopSchemaProfileIdentifier: schema)
     }

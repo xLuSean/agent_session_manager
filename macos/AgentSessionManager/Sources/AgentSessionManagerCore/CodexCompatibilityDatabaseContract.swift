@@ -8,20 +8,27 @@ enum CodexCompatibilityDatabaseContract {
 
     static func inspect(database: CodexGhostRepairSnapshotAnalysisDatabase, version: Int32,
                         rows: Rows) throws -> (issue: CodexCompatibilityDatabaseIssue?, profile: String?, inspectionOnly: Bool) {
+        if database == .threadHistory,
+           try CodexThreadHistoryContract.isPresent(rows: { try rows($0.sql) }) {
+            guard version == 0 else { return (.version, nil, false) }
+            let issue = try CodexThreadHistoryContract.validate(rows: { try rows($0.sql) })
+            return (issue, issue == nil ? CodexThreadHistoryContract.profileIdentifier : nil, false)
+        }
         if database == .desktop {
             let profiles = CodexGhostRepairDatabaseSchemaProfile.inspectionProfiles.filter {
                 $0.databaseVersions[.desktop] == version
             }
+            let production = try !rows("SELECT name FROM sqlite_master WHERE type='table' AND name='active_chat_turns'").isEmpty
             guard !profiles.isEmpty else { return (.version, nil, false) }
             var firstIssue: CodexCompatibilityDatabaseIssue?
-            for profile in profiles {
+            for profile in profiles where (profile == .desktopV34Production) == production {
                 let issue = try validate(database: database, version: version, profile: profile, rows: rows)
                 if issue == nil {
                     return (nil, profile.identifier, !CodexGhostRepairDatabaseSchemaProfile.admittedProfiles.contains(profile))
                 }
                 if firstIssue == nil { firstIssue = issue }
             }
-            return (firstIssue, nil, false)
+            return (firstIssue ?? .table, nil, false)
         }
         let issue = try validate(database: database, version: version, profile: nil, rows: rows)
         var extendedHistory = false

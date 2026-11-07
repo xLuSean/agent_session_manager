@@ -63,7 +63,7 @@ struct SQLiteMigration: Sendable {
 /// reconciliation and audited lifecycle metadata; Fixture mode does not create
 /// or mutate this production store.
 public final class SQLiteStateStore: @unchecked Sendable {
-    public static let currentSchemaVersion: Int32 = 23
+    public static let currentSchemaVersion: Int32 = 24
 
     // ASCII "ASM1". This prevents a future caller from treating an unrelated
     // versioned SQLite database as an Agent Session Manager state store.
@@ -607,6 +607,26 @@ public final class SQLiteStateStore: @unchecked Sendable {
         SQLiteMigration(fromVersion: 22, toVersion: 23, statements: [
             "ALTER TABLE provider_checkpoints ADD COLUMN compatibility_binding_json TEXT",
         ]),
+        SQLiteMigration(fromVersion: 23, toVersion: 24, statements: schemaV24Statements),
+    ]
+
+    // Preserve the original immutable binding and journal when a later Desktop channel needs a separate cleanup.
+    static let schemaV24Statements: [String] = [
+        "ALTER TABLE codex_desktop_cleanup_bindings RENAME TO codex_desktop_cleanup_bindings_v23",
+        schemaV21Statements[0]
+            .replacingOccurrences(of: "canonical_delete_report_id TEXT PRIMARY KEY NOT NULL,",
+                with: "canonical_delete_report_id TEXT NOT NULL, desktop_catalog TEXT NOT NULL CHECK (desktop_catalog IN ('codex-dev.db','codex.db')),")
+            .replacingOccurrences(of: "FOREIGN KEY (bulk_request_id)",
+                with: "PRIMARY KEY (canonical_delete_report_id, desktop_catalog), FOREIGN KEY (bulk_request_id)"),
+        """
+        INSERT INTO codex_desktop_cleanup_bindings
+        SELECT canonical_delete_report_id, 'codex-dev.db', handoff_digest, bulk_request_id, bulk_operation_id,
+               confirmation_receipt_id, confirmation_receipt_digest, plan_digest, backup_receipt_digest,
+               bound_at_milliseconds, payload_json, payload_hash, automatic_retry_allowed, repair_mutation_authority
+        FROM codex_desktop_cleanup_bindings_v23
+        """,
+        "DROP TABLE codex_desktop_cleanup_bindings_v23",
+        schemaV21Statements[1],
     ]
 
     static let schemaV1Statements: [String] = [

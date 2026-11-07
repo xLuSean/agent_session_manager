@@ -26,9 +26,9 @@ active 與 archived 分開分頁讀取，互動清單使用 cli／vscode 來源�
 
 完整 inventory 與 lifecycle-only readback 都使用相同補入器，避免 Archive 後漏項被誤認為不存在。canonical spawn edges 顯示候選有子對話時，子對話保護標為未知，既有 executor 仍拒絕。`0.153.4` 的官方精確 not-loaded 回應還須核對 canonical ID 缺席，以及 sessions／archived_sessions 中沒有同 ID 檔案；不可讀、連結、超出遍歷上限或殘留都使缺席證據不可用。這些檢查不修改 Codex 資料，也不取代後續 Desktop／全域設定清理。
 
-子對話保護使用獨立 all-source active／archived inventory；它不是主要瀏覽清單。置頂資訊須符合前後一致的 Desktop pin snapshot，並與官方欄位沒有衝突。未知不能當成未置頂；跨主機 running／current 缺乏負面證據時保持未知。
+子對話保護使用獨立 all-source active／archived inventory；它不是主要瀏覽清單。CLI 0.164.0 與桌面內建 0.166.0-alpha.5.1 改以官方 `Thread.section` 判斷：所有已分區對話都受保護，分區以穩定 ID 比對，改名不解除保護；不同清單的分區不一致或缺少欄位時保持未知。舊版仍要求前後一致的 Desktop pin snapshot，並與官方置頂欄位沒有衝突。未知不能當成未受保護；跨主機 running／current 缺乏負面證據時保持未知。
 
-Project 來自 Desktop local-projects 的路徑對應；Working Folder 是 thread.cwd；Trust Folder 來自 config/read 中最長符合的設定路徑。Git metadata 不是 Project fallback。未知大小不估算，也不為顯示容量而讀 rollout 內容。
+上述新版的 Project 來自官方 `project/list`，初始化開啟該唯讀介面需要的 experimental capability；完整取得有界分頁後才採用，失敗不退回已遷移的舊清單。明確的 `thread.projectId` 優先，沒有指派 ID 才按最長專案根路徑對應；舊版沿用 Desktop local-projects。Working Folder 是 thread.cwd；Trust Folder 來自 config/read 中最長符合的設定路徑。Git metadata 不是 Project fallback。未知大小不估算，也不為顯示容量而讀 rollout 內容。
 
 管理狀態由原生狀態與本機意圖合成：
 

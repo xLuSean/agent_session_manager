@@ -80,6 +80,27 @@ final class CodexCompatibilityTests: XCTestCase {
         XCTAssertFalse(try CodexCompatibilitySchema.read(directory: root).browsing)
     }
 
+    func testModernInterfaceRequiresValidSectionDefinition() throws {
+        try writeSchemas()
+        let url = root.appendingPathComponent("v2/ThreadListResponse.json")
+        var document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        XCTAssertTrue(CodexCompatibilitySchema.threadDecoder(document))
+        XCTAssertFalse(CodexCompatibilitySchema.threadDecoder(document, requiresSections: true))
+        var definitions = document["definitions"] as! [String: [String: Any]]
+        var thread = definitions["Thread"]!
+        var properties = thread["properties"] as! [String: [String: Any]]
+        properties["section"] = ["anyOf": [["$ref": "#/definitions/ThreadSection"], ["type": "null"]]]
+        thread["properties"] = properties
+        definitions["Thread"] = thread
+        definitions["ThreadSection"] = ["type": "object", "required": ["id", "name"],
+            "properties": ["id": ["type": "string"], "name": ["type": "string"]]]
+        document["definitions"] = definitions
+        XCTAssertTrue(CodexCompatibilitySchema.threadDecoder(document, requiresSections: true))
+        definitions["ThreadSection"]?["required"] = ["name"]
+        document["definitions"] = definitions
+        XCTAssertFalse(CodexCompatibilitySchema.threadDecoder(document, requiresSections: true))
+    }
+
     func testDatabaseFingerprintChangesForSchemaNotConversationData() throws {
         let database = root.appendingPathComponent("test.db")
         try execute(database, "CREATE TABLE conversations (id TEXT, private_body TEXT); INSERT INTO conversations VALUES ('fake', 'private fixture');")

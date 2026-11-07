@@ -174,7 +174,7 @@ final class CodexGhostRepairSnapshotAcquisitionJournalTests: XCTestCase {
             CodexGhostRepairSnapshotCanonicalSource.testMirrorMarkerContents.utf8
         ).write(to: sourceMarker)
         XCTAssertEqual(chmod(sourceMarker.path, 0o600), 0)
-        for file in CodexGhostRepairSnapshotCanonicalFile.allCases
+        for file in CodexGhostRepairSnapshotCanonicalFile.legacyFiles
             where file.isRequiredDatabase {
             let url = file.sourceURL(
                 codexHomeURL: codexHome,

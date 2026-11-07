@@ -85,6 +85,9 @@ public enum CollectionFilter: String, CaseIterable, Identifiable, Sendable {
 }
 
 public struct SessionProtection: Codable, Hashable, Sendable {
+    /// Optional to preserve the encoding of historical operation evidence.
+    public var usesSectionProtection: Bool? = nil
+    public var pinLabel: String { usesSectionProtection == true ? "Protected section" : "Pinned" }
     public var isPinned: Bool
     public var isRunning: Bool
     public var isCurrent: Bool
@@ -124,12 +127,12 @@ public struct SessionProtection: Codable, Hashable, Sendable {
     /// caller must read back once and must not retry blindly.
     public var archiveAttemptBlockingLabels: [String] {
         var values: [String] = []
-        if isPinned { values.append("Pinned") }
+        if isPinned { values.append(pinLabel) }
         if isRunning { values.append("Running") }
         if isCurrent { values.append("Current") }
-        if hasPinnedDescendant { values.append("Pinned descendant") }
-        if !isPinnedKnown { values.append("Pin state unavailable") }
-        if !hasPinnedDescendantKnown { values.append("Pinned descendant state unavailable") }
+        if hasPinnedDescendant { values.append(usesSectionProtection == true ? "Protected section descendant" : "Pinned descendant") }
+        if !isPinnedKnown { values.append(usesSectionProtection == true ? "Section state unavailable" : "Pin state unavailable") }
+        if !hasPinnedDescendantKnown { values.append(usesSectionProtection == true ? "Descendant section state unavailable" : "Pinned descendant state unavailable") }
         return values
     }
 
@@ -165,14 +168,14 @@ public struct SessionProtection: Codable, Hashable, Sendable {
 
     public var labels: [String] {
         var values: [String] = []
-        if isPinned { values.append("Pinned") }
+        if isPinned { values.append(pinLabel) }
         if isRunning { values.append("Running") }
         if isCurrent { values.append("Current") }
-        if hasPinnedDescendant { values.append("Pinned descendant") }
-        if !isPinnedKnown { values.append("Pin state unavailable") }
+        if hasPinnedDescendant { values.append(usesSectionProtection == true ? "Protected section descendant" : "Pinned descendant") }
+        if !isPinnedKnown { values.append(usesSectionProtection == true ? "Section state unavailable" : "Pin state unavailable") }
         if !isRunningKnown { values.append("Running state unavailable") }
         if !isCurrentKnown { values.append("Current state unavailable") }
-        if !hasPinnedDescendantKnown { values.append("Pinned descendant state unavailable") }
+        if !hasPinnedDescendantKnown { values.append(usesSectionProtection == true ? "Descendant section state unavailable" : "Pinned descendant state unavailable") }
         return values
     }
 }

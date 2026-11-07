@@ -28,12 +28,33 @@ final class CodexCleanupClosedWALTests: XCTestCase {
         try await checkFullCleanup(preserveSidecars: true, reviewedResidue: true)
     }
 
-    private func checkFullCleanup(preserveSidecars: Bool, reviewedResidue: Bool = false) async throws {
+    func testRealtimeProfileReviewedCleanupBacksUpAndPreservesPausedSchedule() async throws {
+        try await checkFullCleanup(preserveSidecars: false, reviewedResidue: true,
+                                   profile: .v166DesktopV34Realtime, runtime: "0.164.0")
+    }
+
+    func testProductionCleanupLeavesDevelopmentCatalogUntouchedWhenSummariesDoNotExist() async throws {
+        try await checkFullCleanup(preserveSidecars: false, profile: .v166Production, runtime: "0.164.0", omitSummaries: true)
+    }
+
+    func testProductionCleanupReadsAndBacksUpItsOwnSummaries() async throws {
+        try await checkFullCleanup(preserveSidecars: true, reviewedResidue: true, profile: .v166Production, runtime: "0.164.0")
+    }
+
+    private func checkFullCleanup(preserveSidecars: Bool, reviewedResidue: Bool = false,
+                                  profile: CodexGhostRepairSnapshotSourceProfile = .v156DesktopV34Extended,
+                                  runtime: String = "0.157.1", omitSummaries: Bool = false) async throws {
         let fixture = try BulkShippingCompositionTestFixture.make(itemCount: 2, desktopSchema: 34,
-            profile: .v156DesktopV34Extended, runtimeVersion: "0.157.1", reviewedResidue: reviewedResidue)
+            profile: profile, runtimeVersion: runtime, reviewedResidue: reviewedResidue, omitProductionSummaries: omitSummaries)
         defer { trashFixture(fixture.parent) }
-        let repairResolution = try fixture.bundle.resolveForPreflight()
-        for database in [CodexGhostRepairProductionRepairDatabase.desktop, .summaries, .state, .threadHistory] {
+        let repairResolution = try fixture.bundle.resolveForPreflight(profile: profile)
+        let development = fixture.codexHome.appendingPathComponent("sqlite/codex-dev.db")
+        if profile == .v166Production {
+            try BulkShippingCompositionTestFixture.createExtendedDesktop(at: development, itemCount: 2)
+            XCTAssertEqual(try CodexGhostRepairInstalledSourceProfileReader.read(exactRuntimeVersion: runtime, databaseURL: fixture.desktopURL), .v166Production)
+        }
+        let otherCatalogBefore = profile == .v166Production ? try Data(contentsOf: development) : nil
+        for database in [CodexGhostRepairProductionRepairDatabase.desktop, .summaries, .state, .threadHistory] where !omitSummaries || database != .summaries {
             try closeWAL(at: repairResolution.databaseURL(for: database), preserveSidecars: preserveSidecars)
         }
         let managerRoot = fixture.parent.appendingPathComponent("manager", isDirectory: true)
@@ -48,7 +69,7 @@ final class CodexCleanupClosedWALTests: XCTestCase {
         let environment = try CodexGhostRepairBulkLiveBackupEnvironment(
             testOwnedCodexHomeURL: fixture.codexHome, testOwnedSourceAllowedParentURL: fixture.parent,
             testOwnedManagerRootURL: managerRoot, testOwnedManagerAllowedParentURL: fixture.parent,
-            profile: .v156DesktopV34Extended, nowMilliseconds: { 1_400 })
+            profile: profile, nowMilliseconds: { 1_400 })
         let source = fixture.source
         let preparer = CodexGhostRepairBulkPackagedPlanPreparer(
             storeProvider: { try SQLiteStateStore(databaseURL: fixture.managerStateURL) },
@@ -56,7 +77,7 @@ final class CodexCleanupClosedWALTests: XCTestCase {
                 let resolution = try CodexGhostRepairBulkProductionBundle(coldReadback: preview,
                     testOwnedCodexHomeURL: fixture.codexHome, testOwnedAllowedParentURL: fixture.parent)
                     .resolveForTestOwnedAdoption()
-                return (resolution, .v156DesktopV34Extended)
+                return (resolution, profile)
             },
             maintenanceObserverProvider: { profile in
                 CodexGhostRepairBulkProductionMaintenanceObserver(profile: profile,
@@ -80,7 +101,7 @@ final class CodexCleanupClosedWALTests: XCTestCase {
         }
         func makeMutator() -> CodexGhostRepairBulkLiveMixedMutator {
             .init(testOwnedCodexHomeURL: fixture.codexHome, testOwnedAllowedParentURL: fixture.parent,
-                profile: .v156DesktopV34Extended, gateSource: ClosedWALGate(), backupReader: FixedBulkLiveBackupReadback(
+                profile: profile, gateSource: ClosedWALGate(), backupReader: FixedBulkLiveBackupReadback(
                     value: prepared.plan.backup, fails: false))
         }
         let runner = CodexGhostRepairBulkLiveOneShotCoordinator(journal: journal, mutator: makeMutator(),
@@ -91,6 +112,12 @@ final class CodexCleanupClosedWALTests: XCTestCase {
         XCTAssertEqual(report.outcome, .success)
         XCTAssertEqual(report.items.count, 2)
         try CodexGhostRepairProductionSQLite.withReadOnly(at: fixture.desktopURL) { desktop in
+            if reviewedResidue {
+                XCTAssertEqual(try desktop.query("SELECT status FROM automations WHERE id = 'automation-1'", maximumRows: 1)
+                    .first?.value(named: "status"), .text("PAUSED"))
+                XCTAssertEqual(try desktop.query("SELECT status FROM automation_runs WHERE automation_id = 'automation-1'", maximumRows: 1)
+                    .first?.value(named: "status"), .text("ARCHIVED"))
+            }
             XCTAssertEqual(try desktop.query("SELECT count(*) AS count FROM local_thread_catalog WHERE host_id = 'local'", maximumRows: 1)
                 .first?.value(named: "count"), .integer(0))
             XCTAssertEqual(try desktop.query("SELECT count(*) AS count FROM local_thread_catalog WHERE host_id = 'remote'", maximumRows: 1)
@@ -98,9 +125,19 @@ final class CodexCleanupClosedWALTests: XCTestCase {
             XCTAssertEqual(try desktop.query("SELECT catalog_revision FROM local_thread_catalog_metadata", maximumRows: 1)
                 .first?.value(named: "catalog_revision"), .integer(1002))
         }
-        try CodexGhostRepairProductionSQLite.withReadOnly(at: repairResolution.databaseURL(for: .summaries)) { summaries in
-            XCTAssertEqual(try summaries.query("SELECT count(*) AS count FROM thread_turn_summaries", maximumRows: 1)
-                .first?.value(named: "count"), .integer(reviewedResidue ? 1 : 0))
+        if let otherCatalogBefore {
+            XCTAssertEqual(try Data(contentsOf: development), otherCatalogBefore)
+            XCTAssertTrue(prepared.plan.backup.files.contains { $0.fileName == "codex.db" && $0.present })
+            XCTAssertFalse(prepared.plan.backup.files.contains { $0.fileName == "codex-dev.db" })
+            XCTAssertEqual(prepared.plan.backup.files.first { $0.fileName == "codex-thread-summaries.db" }?.present, !omitSummaries)
+        }
+        if omitSummaries {
+            XCTAssertTrue(try CodexGhostRepairSnapshotCanonicalFile.productionSummariesAbsent(at: repairResolution.databaseURL(for: .summaries)))
+        } else {
+            try CodexGhostRepairProductionSQLite.withReadOnly(at: repairResolution.databaseURL(for: .summaries)) { summaries in
+                XCTAssertEqual(try summaries.query("SELECT count(*) AS count FROM thread_turn_summaries", maximumRows: 1)
+                    .first?.value(named: "count"), .integer(reviewedResidue ? 1 : 0))
+            }
         }
         // A fresh coordinator must read the completed journal without replaying cleanup.
         let cold = CodexGhostRepairBulkLiveOneShotCoordinator(journal: journal, mutator: makeMutator(),

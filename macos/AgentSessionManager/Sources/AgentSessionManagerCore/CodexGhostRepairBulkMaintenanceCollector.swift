@@ -149,7 +149,7 @@ struct CodexGhostRepairBulkFreshMaintenanceReadback:
               blockedOutsideBatchCount >= 0,
               databaseContracts.map(\.database) == expectedDatabases,
               databaseContracts.count == 5,
-              databaseContracts.filter(\.required).count == 4,
+              CodexGhostRepairBulkProductionBundleDatabaseContract.matchesLayout(databaseContracts),
               maintenance.executionGate.stateOpenHandleCount != nil,
               maintenance.executionGate.threadHistoryOpenHandleCount != nil,
               Self.isSHA256(bundleDigest),

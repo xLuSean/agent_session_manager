@@ -23,11 +23,11 @@ public enum CodexGhostRepairOperationalBlocker: String, Codable, Hashable, Senda
         case .codexStillRunning:
             "Codex Desktop is still running"
         case .desktopDatabaseOpen:
-            "codex-dev.db still has an open handle"
+            "The Desktop catalog still has an open handle"
         case .summariesDatabaseOpen:
-            "codex-thread-summaries-dev.db still has an open handle"
+            "The Desktop summaries database still has an open handle"
         case .historyDatabaseOpen:
-            "Legacy codex-history-snapshots-dev.db still has an open handle"
+            "The legacy Desktop history database still has an open handle"
         case .stateDatabaseOpen:
             "state_5.sqlite still has an open handle"
         case .threadHistoryDatabaseOpen:

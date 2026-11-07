@@ -106,6 +106,17 @@ struct CodexGhostRepairBulkProductionBundleDatabaseContract:
     let role: CodexGhostRepairBulkProductionDatabaseRole
 }
 
+extension CodexGhostRepairBulkProductionBundleDatabaseContract {
+    static func matchesLayout(_ contracts: [Self]) -> Bool {
+        [CodexGhostRepairSnapshotSourceProfile.v149DesktopV32, .v166Production].contains { profile in
+            contracts == CodexGhostRepairBulkProductionDatabase.allCases.map { database in
+                let file = profile.member(database.canonicalFile)
+                return Self(database: database, canonicalFileName: file.rawValue, required: file.isRequiredDatabase, role: database.role)
+            }
+        }
+    }
+}
+
 /// M4f-12's dedicated bulk boundary. It is deliberately separate from the
 /// old one- or two-item Category A bundle. This slice accepts only an exact
 /// Manager SQLite cold readback that already includes M4f-11 selected-only
@@ -271,12 +282,18 @@ struct CodexGhostRepairBulkProductionBundle: Sendable {
             "sqlite",
             isDirectory: true
         )
+        guard let profile = CodexGhostRepairSnapshotSourceProfile.admitted(sourceLayoutIdentifier: source.sourceLayoutIdentifier) else {
+            throw CodexGhostRepairError.invalidProtectionEvidence("Unknown Desktop catalog layout.")
+        }
+        if acceptsLiveCodexRoot && profile == .v166DesktopV34Realtime {
+            throw CodexGhostRepairError.invalidProtectionEvidence("This saved cleanup used the previous development catalog. Review the current Desktop catalog before cleanup.")
+        }
         let contracts = CodexGhostRepairBulkProductionDatabase.allCases.map {
             database in
             CodexGhostRepairBulkProductionBundleDatabaseContract(
                 database: database,
-                canonicalFileName: database.canonicalFile.rawValue,
-                required: database.required,
+                canonicalFileName: profile.member(database.canonicalFile).rawValue,
+                required: profile.member(database.canonicalFile).isRequiredDatabase,
                 role: database.role
             )
         }
@@ -284,7 +301,7 @@ struct CodexGhostRepairBulkProductionBundle: Sendable {
             CodexGhostRepairBulkProductionDatabase.allCases.map { database in
                 (
                     database,
-                    database.canonicalFile.sourceURL(
+                    profile.member(database.canonicalFile).sourceURL(
                         codexHomeURL: codexHome,
                         sqliteRootURL: sqliteRoot
                     )
@@ -342,7 +359,7 @@ struct CodexGhostRepairBulkProductionBundle: Sendable {
               resolution.ordinaryCount + resolution.automationCount
                 == resolution.selectedCount,
               resolution.databaseContracts.count == 5,
-              resolution.databaseContracts.filter({ $0.required }).count == 4,
+              CodexGhostRepairBulkProductionBundleDatabaseContract.matchesLayout(resolution.databaseContracts),
               resolution.databaseContracts.filter({
                   $0.role == .futureSingleTransactionMutation
               }).count == 1,

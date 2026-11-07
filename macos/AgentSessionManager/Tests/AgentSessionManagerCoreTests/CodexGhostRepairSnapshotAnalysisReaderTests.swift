@@ -557,6 +557,10 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
         try await verifyExtendedPublication(profile: .v160DesktopV34Async, runtime: "0.160.0")
     }
 
+    func testCurrentV166RequestBoundPublisherVerifiesExact148Publication() async throws {
+        try await verifyExtendedPublication(profile: .v166Production, runtime: "0.164.0")
+    }
+
     private func verifyExtendedPublication(profile: CodexGhostRepairSnapshotSourceProfile, runtime: String) async throws {
         let exactTargets = (1...148).map {
             String(format: "00000000-0000-4000-8003-%012x", $0)
@@ -610,6 +614,22 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
             evidence.readback.databases.map(\.schemaVersion),
             [34, 2, 0, 0]
         )
+    }
+
+    func testV166PublishedInventoryCountsRealtimeReferences() async throws {
+        let fixture = try await makeFixture(label: #function, desktopUserVersion: 34, sourceProfile: .v166Production)
+        let history = try XCTUnwrap(fixture.sourceFiles[.threadHistory])
+        try BulkShippingCompositionTestFixture.execute("INSERT INTO thread_realtime_items VALUES ('\(targets[0])', 'item', 0, 0, 'realtime_session_started', '{}')", at: history)
+        let desktop = try XCTUnwrap(fixture.sourceFiles[.desktop])
+        try BulkShippingCompositionTestFixture.execute("INSERT INTO active_chat_turns VALUES ('profile','account','user','\(targets[1])','launch',1)", at: desktop)
+        let request = try makeSnapshotRequest(runtimeVersion: "0.164.0", targetThreadIDs: targets)
+        let selection = try CodexGhostRepairSnapshotRequestBoundProfileSelection(request: request)
+        _ = try await fixture.requestBoundPublisher(selection: selection).acquire(snapshotID: snapshotID, request: request)
+        let identity = try await fixture.resolvedIdentity(snapshotID: snapshotID)
+        let evidence = try await fixture.reader().readBulkCatalog(snapshotReference: identity.snapshotReference)
+        XCTAssertEqual(evidence.readback.targets.first { $0.threadID == targets[0] }?.references.realtimeItems, 1)
+        XCTAssertEqual(evidence.readback.targets.first { $0.threadID == targets[1] }?.references.realtimeItems, 0)
+        XCTAssertEqual(evidence.readback.targets.first { $0.threadID == targets[1] }?.references.activeChatTurns, 1)
     }
 
     func testV156PublisherRejectsTimedHistoryDriftBeforePublication() async throws {
@@ -1371,6 +1391,9 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
                 CodexGhostRepairSnapshotCanonicalSource.testMirrorMarkerFileName
             )
         )
+        func physical(_ file: CodexGhostRepairSnapshotCanonicalFile) -> CodexGhostRepairSnapshotCanonicalFile {
+            sourceProfile?.member(file) ?? file
+        }
         let versions: [CodexGhostRepairSnapshotCanonicalFile: Int32] = [
             .desktop: desktopUserVersion,
             .summaries: 2,
@@ -1379,7 +1402,7 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
         ]
         for (file, version) in versions {
             try createSQLite(
-                at: file.sourceURL(
+                at: physical(file).sourceURL(
                     codexHomeURL: codexHome,
                     sqliteRootURL: sqliteRoot
                 ),
@@ -1395,13 +1418,13 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
                     useObservedAutomationRRuleDefault
             )
             if withWALSidecars {
-                try materializeWALBundle(at: file.sourceURL(
+                try materializeWALBundle(at: physical(file).sourceURL(
                     codexHomeURL: codexHome,
                     sqliteRootURL: sqliteRoot
                 ))
                 if omitSharedMemoryFor.contains(file) {
                     try FileManager.default.removeItem(at: URL(
-                        fileURLWithPath: file.sourceURL(
+                        fileURLWithPath: physical(file).sourceURL(
                             codexHomeURL: codexHome,
                             sqliteRootURL: sqliteRoot
                         ).path + "-shm"
@@ -1421,11 +1444,11 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
         )
         if manualResidue {
             let desktop = try CodexGhostRepairProductionSQLite(
-                url: CodexGhostRepairSnapshotCanonicalFile.desktop.sourceURL(codexHomeURL: codexHome, sqliteRootURL: sqliteRoot), readOnly: false)
+                url: physical(.desktop).sourceURL(codexHomeURL: codexHome, sqliteRootURL: sqliteRoot), readOnly: false)
             try desktop.execute("UPDATE automations SET status = 'PAUSED'")
             desktop.close()
             let summaries = try CodexGhostRepairProductionSQLite(
-                url: CodexGhostRepairSnapshotCanonicalFile.summaries.sourceURL(codexHomeURL: codexHome, sqliteRootURL: sqliteRoot), readOnly: false)
+                url: physical(.summaries).sourceURL(codexHomeURL: codexHome, sqliteRootURL: sqliteRoot), readOnly: false)
             try summaries.execute("INSERT INTO thread_turn_summaries VALUES ('principal','local',?,'private-summary-content',NULL,NULL,1,1)", bindings: [.text(fixtureTargets[1])])
             summaries.close()
         }
@@ -1451,12 +1474,19 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
             capacityProbe: M2bCapacityProbe()
         )
         let binding = try await destination.bindPrepared()
-        if sourceProfile == .v156DesktopV34Extended || sourceProfile == .v160DesktopV34Async {
-            try BulkShippingCompositionTestFixture.execute("ALTER TABLE local_thread_catalog ADD COLUMN trial_conversation_type TEXT; ALTER TABLE automations ADD COLUMN auto_archive INTEGER NOT NULL DEFAULT 0;", at: codexHome.appendingPathComponent("sqlite/codex-dev.db"))
+        if [.v156DesktopV34Extended, .v160DesktopV34Async, .v166DesktopV34Realtime, .v166Production].contains(sourceProfile) {
+            try BulkShippingCompositionTestFixture.execute("ALTER TABLE local_thread_catalog ADD COLUMN trial_conversation_type TEXT; ALTER TABLE automations ADD COLUMN auto_archive INTEGER NOT NULL DEFAULT 0;", at: sqliteRoot.appendingPathComponent(physical(.desktop).rawValue))
             try BulkShippingCompositionTestFixture.execute("ALTER TABLE thread_items ADD COLUMN started_at_ms INTEGER; ALTER TABLE thread_items ADD COLUMN completed_at_ms INTEGER;", at: codexHome.appendingPathComponent("thread_history_1.sqlite"))
         }
-        if sourceProfile == .v160DesktopV34Async {
-            try BulkShippingCompositionTestFixture.execute("ALTER TABLE local_thread_catalog ADD COLUMN chatgpt_async_status INTEGER; ALTER TABLE automations ADD COLUMN next_run_nominal_at INTEGER;", at: codexHome.appendingPathComponent("sqlite/codex-dev.db"))
+        if [.v160DesktopV34Async, .v166DesktopV34Realtime, .v166Production].contains(sourceProfile) {
+            try BulkShippingCompositionTestFixture.execute("ALTER TABLE local_thread_catalog ADD COLUMN chatgpt_async_status INTEGER; ALTER TABLE automations ADD COLUMN next_run_nominal_at INTEGER;", at: sqliteRoot.appendingPathComponent(physical(.desktop).rawValue))
+        }
+        if sourceProfile == .v166Production {
+            try BulkShippingCompositionTestFixture.execute("CREATE TABLE active_chat_turns(profile TEXT NOT NULL, account_id TEXT NOT NULL, user_id TEXT NOT NULL, thread_id TEXT NOT NULL, launch_id TEXT NOT NULL, observed_at_ms INTEGER NOT NULL, PRIMARY KEY(profile,account_id,user_id,thread_id))",
+                at: sqliteRoot.appendingPathComponent(physical(.desktop).rawValue))
+        }
+        if [.v166DesktopV34Realtime, .v166Production].contains(sourceProfile) {
+            try CodexRealtimeHistoryTestFixture.replace(at: codexHome.appendingPathComponent("thread_history_1.sqlite"))
         }
         let defaultProfile: CodexGhostRepairSnapshotSourceProfile = switch desktopUserVersion {
         case 34: .v152DesktopV34
@@ -1484,8 +1514,8 @@ final class CodexGhostRepairSnapshotAnalysisReaderTests: XCTestCase {
             journalRoot: try XCTUnwrap(locations[.journal]),
             workspaceParent: workspaceParent,
             sourceFiles: Dictionary(uniqueKeysWithValues:
-                CodexGhostRepairSnapshotCanonicalFile.allCases.map {
-                ($0, $0.sourceURL(
+                CodexGhostRepairSnapshotCanonicalFile.legacyFiles.map {
+                ($0, physical($0).sourceURL(
                     codexHomeURL: codexHome,
                     sqliteRootURL: sqliteRoot
                 ))

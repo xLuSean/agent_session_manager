@@ -373,26 +373,22 @@ extension SQLiteStateStore {
                 ), durableHandoff == handoff else {
                     throw CodexGhostRepairError.recoveryRequired
                 }
+                guard let snapshot = try validatedCodexGhostRepairBulkLiveJournalSnapshot(identity: bulkIdentity, database: database),
+                      let catalog = snapshot.record.plan.databaseContracts.first(where: { $0.database == .desktop })?.canonicalFileName,
+                      ["codex-dev.db", "codex.db"].contains(catalog) else { throw CodexGhostRepairError.recoveryRequired }
                 if let existing = try loadCodexDesktopCleanupBinding(
                     reportID: handoff.canonicalDeleteReportID,
                     database: database
                 ) {
-                    guard existing.bulkIdentity == bulkIdentity,
-                          existing.handoffDigest == handoff.handoffDigest else {
+                    guard existing.handoffDigest == handoff.handoffDigest else { throw CodexGhostRepairError.recoveryRequired }
+                    let previous = try validate(existing, handoff: durableHandoff, database: database)
+                    if existing.bulkIdentity == bulkIdentity { return .alreadyBound(existing) }
+                    guard catalog == "codex.db", previous.plan.databaseContracts.first?.canonicalFileName == "codex-dev.db",
+                          case .verified = try codexDesktopCleanupStatus(reportID: handoff.canonicalDeleteReportID, database: database) else {
                         throw CodexGhostRepairError.recoveryRequired
                     }
-                    _ = try validate(
-                        existing,
-                        handoff: durableHandoff,
-                        database: database
-                    )
-                    return .alreadyBound(existing)
                 }
-                guard let snapshot = try
-                    validatedCodexGhostRepairBulkLiveJournalSnapshot(
-                        identity: bulkIdentity,
-                        database: database
-                    ), snapshot.record.phase == .prepared,
+                guard snapshot.record.phase == .prepared,
                       snapshot.record.claim == nil,
                       snapshot.record.attempt == nil,
                       snapshot.record.report == nil,
@@ -454,8 +450,8 @@ extension SQLiteStateStore {
                         confirmation_receipt_digest, plan_digest,
                         backup_receipt_digest, bound_at_milliseconds,
                         payload_json, payload_hash,
-                        automatic_retry_allowed, repair_mutation_authority
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                        automatic_retry_allowed, repair_mutation_authority, desktop_catalog
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
                     """,
                     values: [
                         .text(binding.canonicalDeleteReportID
@@ -471,7 +467,7 @@ extension SQLiteStateStore {
                         .text(binding.planDigest),
                         .text(binding.backupReceiptDigest),
                         .int64(binding.boundAtMilliseconds),
-                        .text(encoded), .text(payloadHash),
+                        .text(encoded), .text(payloadHash), .text(catalog),
                     ],
                     database: database
                 )
@@ -489,15 +485,15 @@ extension SQLiteStateStore {
     }
 
     func codexDesktopCleanupStatus(
-        reportID: UUID
+        reportID: UUID, requireProductionCatalog: Bool = false
     ) throws -> CodexDesktopCleanupStatus? {
         try withLockedDatabase { database in
-            try codexDesktopCleanupStatus(reportID: reportID, database: database)
+            try codexDesktopCleanupStatus(reportID: reportID, database: database, requireProductionCatalog: requireProductionCatalog)
         }
     }
 
     func codexDesktopCleanupStatus(
-        reportID: UUID, database: OpaquePointer
+        reportID: UUID, database: OpaquePointer, requireProductionCatalog: Bool = false
     ) throws -> CodexDesktopCleanupStatus? {
             guard let handoff = try codexDesktopCleanupHandoff(
                 reportID: reportID,
@@ -560,6 +556,9 @@ extension SQLiteStateStore {
                         return outcome == .success || outcome == .alreadyAbsent
                     }) else {
                         throw CodexGhostRepairError.recoveryRequired
+                    }
+                    if requireProductionCatalog && record.plan.databaseContracts.first?.canonicalFileName == "codex-dev.db" {
+                        return .pending(handoff)
                     }
                     return .verified(
                         handoff, binding,
@@ -629,6 +628,7 @@ extension SQLiteStateStore {
                    automatic_retry_allowed, repair_mutation_authority
             FROM codex_desktop_cleanup_bindings
             WHERE canonical_delete_report_id = ?
+            ORDER BY (desktop_catalog = 'codex.db') DESC LIMIT 1
             """,
             values: [.text(reportID.uuidString.lowercased())],
             database: database
@@ -737,6 +737,7 @@ actor CodexDesktopCleanupLinkageCoordinator:
     private let fileExists: @Sendable (String) -> Bool
     private let nowMilliseconds: @Sendable () -> Int64
     private let testStore: SQLiteStateStore?
+    private let requiresProductionCatalog: @Sendable () -> Bool
 
     init(
         databaseURLProvider: @escaping @Sendable () throws -> URL = {
@@ -753,6 +754,7 @@ actor CodexDesktopCleanupLinkageCoordinator:
         self.fileExists = fileExists
         self.nowMilliseconds = nowMilliseconds
         testStore = nil
+        requiresProductionCatalog = { CodexCompatibilityDesktopApplication.installedUsesProductionCatalog }
     }
 
     init(
@@ -763,6 +765,7 @@ actor CodexDesktopCleanupLinkageCoordinator:
         fileExists = { _ in true }
         self.nowMilliseconds = nowMilliseconds
         self.testStore = testStore
+        requiresProductionCatalog = { false }
     }
 
     func reviewCanonicalDelete(
@@ -832,7 +835,7 @@ actor CodexDesktopCleanupLinkageCoordinator:
     ) async -> CodexDesktopCleanupStatusOutcome {
         do {
             guard let loaded = try withStore({
-                try $0.codexDesktopCleanupStatus(reportID: reportID)
+                try $0.codexDesktopCleanupStatus(reportID: reportID, requireProductionCatalog: requiresProductionCatalog())
             }), let status = loaded else {
                 return .notFound(reportID: reportID)
             }

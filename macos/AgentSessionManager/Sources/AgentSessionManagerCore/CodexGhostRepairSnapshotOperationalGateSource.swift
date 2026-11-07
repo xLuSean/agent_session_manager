@@ -41,9 +41,12 @@ actor CodexGhostRepairSnapshotOperationalGateSource:
 
     /// No-path, zero-I/O production construction. FileManager resolution and
     /// all read-only inspection are deferred until an explicit gate call.
-    static func production() -> Self {
+    static func production(profile: CodexGhostRepairSnapshotSourceProfile = .v149DesktopV32) -> Self {
         Self(
             configurationResolver: {
+                guard (profile == .v166Production) == CodexCompatibilityDesktopApplication.installedUsesProductionCatalog else {
+                    throw CodexGhostRepairError.invalidProtectionEvidence("The installed Desktop catalog changed. Review the current catalog before cleanup.")
+                }
                 let codexHome = FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent(".codex", isDirectory: true)
                 guard let applicationSupport = FileManager.default.urls(
@@ -63,7 +66,7 @@ actor CodexGhostRepairSnapshotOperationalGateSource:
                     )
                 }
                 return CodexGhostRepairOperationalGateConfiguration(
-                    codexHomeURL: codexHome,
+                    codexHomeURL: codexHome, productionCatalog: profile == .v166Production,
                     backupVolumeProbeURL: snapshots,
                     fixedCapacityHeadroomBytes:
                         CodexGhostRepairSnapshotPreparedDestination

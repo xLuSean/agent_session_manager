@@ -977,7 +977,9 @@ struct CodexGhostRepairBulkPublishedSnapshotResumeResolver:
             requiredSourceLayoutIdentifier:
                 CodexGhostRepairPackagedReadOnlyProfileCatalog
                     .v156SourceLayoutIdentifier,
-            additionalSourceLayoutIdentifiers: [CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier]
+            additionalSourceLayoutIdentifiers: [CodexGhostRepairPackagedReadOnlyProfileCatalog.v160SourceLayoutIdentifier,
+                                               CodexGhostRepairPackagedReadOnlyProfileCatalog.v166SourceLayoutIdentifier,
+                                               CodexGhostRepairPackagedReadOnlyProfileCatalog.productionV166SourceLayoutIdentifier]
         )
     }
 

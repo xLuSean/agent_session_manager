@@ -5,19 +5,20 @@ import XCTest
 final class CodexGhostRepairInstalledReadTests: XCTestCase {
     func testInstalledExactCleanupScan() async throws {
         guard ProcessInfo.processInfo.environment["ASM_INSTALLED_CLEANUP_SCAN"] == "1",
-              let target = ProcessInfo.processInfo.environment["ASM_INSTALLED_CLEANUP_THREAD_ID"] else {
+              let scope = ProcessInfo.processInfo.environment["ASM_INSTALLED_CLEANUP_THREAD_IDS"] ?? ProcessInfo.processInfo.environment["ASM_INSTALLED_CLEANUP_THREAD_ID"] else {
             throw XCTSkip("Explicit opt-in and exact scope required for the read-only App Server scan.")
         }
-        let handoff = try CodexDesktopCleanupHandoff(canonicalDeleteReportID: UUID(), items: [
-            try .init(managerKey: "codex:\(target)", nativeSessionID: target, deletedAtMilliseconds: 1)
-        ])
+        let ids = scope.split(separator: ",").map(String.init).sorted()
+        let handoff = try CodexDesktopCleanupHandoff(canonicalDeleteReportID: UUID(), items: ids.map { id in
+            try .init(managerKey: "codex:\(id)", nativeSessionID: id, deletedAtMilliseconds: 1)
+        })
         let coordinator = CodexGhostRepairBulkInventoryCoordinatorFactory.packagedExplicitReadOnly()
         let outcome = await coordinator.observeCleanup(request: .init(
             requestID: UUID(), snapshotReference: UUID().uuidString.lowercased()), handoff: handoff)
         switch outcome {
         case let .inventory(_, inventory):
-            XCTAssertEqual(inventory.items.map(\.threadID), [target])
-            XCTAssertEqual(inventory.eligibleThreadIDs, [target])
+            XCTAssertTrue(inventory.items.map(\.threadID).sorted() == ids)
+            XCTAssertTrue(inventory.eligibleThreadIDs.sorted() == ids)
             print("ASM_INSTALLED_CLEANUP_SCAN=complete:eligible=\(inventory.eligibleThreadIDs.count)")
         case let .unavailable(_, failure):
             // Opt-in diagnostics only. Keep titles, IDs, paths and RPC text out
@@ -50,7 +51,9 @@ final class CodexGhostRepairInstalledReadTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["ASM_INSTALLED_CLEANUP_READ"] == "1" else {
             throw XCTSkip("Explicit opt-in required for a read-only canonical copy probe.")
         }
-        let source = CodexGhostRepairSnapshotCanonicalSource.production(profile: .v156DesktopV34Extended)
+        let snapshot = try XCTUnwrap(CodexGhostRepairInstalledSourceProfileReader.read(exactRuntimeVersion:
+            CodexCompatibilityDesktopApplication.installedUsesProductionCatalog ? "0.164.0" : "0.157.1"))
+        let source = CodexGhostRepairSnapshotCanonicalSource.production(profile: snapshot)
         let target = ProcessInfo.processInfo.environment["ASM_INSTALLED_CLEANUP_THREAD_ID"] ?? UUID().uuidString.lowercased()
         do {
             let result = try CodexGhostRepairBulkCanonicalQueryOnlyReader.readExactCleanupScope(
@@ -58,7 +61,7 @@ final class CodexGhostRepairInstalledReadTests: XCTestCase {
                 targetThreadIDs: [target],
                 workspaceFactory: .production()
             )
-            XCTAssertEqual(result.databases.count, 4)
+            XCTAssertTrue(snapshot.admits(databases: result.databases))
             XCTAssertEqual(result.targets.count, 1)
             print("ASM_INSTALLED_CLEANUP_READ=passed")
             for target in result.targets {

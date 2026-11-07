@@ -268,9 +268,9 @@ actor CodexGhostRepairBulkLiveTargetRevalidator {
         )
         return try Self(
             repairResolution: CodexGhostRepairProductionRepairBundle
-                .production().resolveForPreflight(),
+                .production().resolveForPreflight(profile: profile),
             gateSource: CodexGhostRepairSnapshotOperationalGateSource
-                .production(),
+                .production(profile: profile),
             fingerprintReader: { try canonical.fingerprint() },
             nowMilliseconds: {
                 Int64(Date().timeIntervalSince1970 * 1_000)

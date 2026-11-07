@@ -19,8 +19,7 @@ enum CodexCompatibilityBehaviorRunner {
         var stage = "isolated startup"
         let outcome: CodexCompatibilityBehaviorResult
         do {
-            let copy = root.appendingPathComponent("runtime")
-            try FileManager.default.copyItem(at: executable.resolvingSymlinksInPath(), to: copy)
+            let copy = try copyRuntime(executable, into: root)
             try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: copy.path)
             guard try digest(copy) == expectedSHA256 else { throw Failure.changed }
             for name in ["codex", "project"] {
@@ -79,6 +78,31 @@ enum CodexCompatibilityBehaviorRunner {
         return .init(feature: feature, status: outcome.status, detail: outcome.detail + disposal)
     }
 
+    /// Modern signed CLI bundles need their Info.plist and sealed resources at
+    /// startup. Copy the entire recognized CLI bundle, still inside the same
+    /// credential-free, network-denied sandbox; never execute the live copy.
+    static func copyRuntime(_ executable: URL, into root: URL) throws -> URL {
+        let source = executable.resolvingSymlinksInPath()
+        let contents = source.deletingLastPathComponent().deletingLastPathComponent()
+        let bundle = contents.deletingLastPathComponent()
+        if source.deletingLastPathComponent().lastPathComponent == "MacOS",
+           contents.lastPathComponent == "Contents", bundle.pathExtension == "app" {
+            let plist = contents.appendingPathComponent("Info.plist")
+            guard let size = try plist.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 1_048_576,
+                  let info = try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any],
+                  info["CFBundleIdentifier"] as? String == "com.openai.codex.cli",
+                  info["CFBundleExecutable"] as? String == source.lastPathComponent else { throw Failure.bundleIdentity }
+            let destination = root.appendingPathComponent("CodexCLI.app")
+            try FileManager.default.copyItem(at: bundle, to: destination)
+            let copy = destination.appendingPathComponent("Contents/MacOS/" + source.lastPathComponent)
+            guard copy.resolvingSymlinksInPath().path == copy.standardizedFileURL.path else { throw Failure.bundlePath }
+            return copy
+        }
+        let copy = root.appendingPathComponent("runtime")
+        try FileManager.default.copyItem(at: source, to: copy)
+        return copy
+    }
+
     private static func digest(_ url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
@@ -92,11 +116,15 @@ enum CodexCompatibilityBehaviorRunner {
 
     private enum Failure: Error {
         case contract, changed, timeout, outputLimit, pagination, decoding, canonicalRow, databasePath, databaseOpen, databaseSchema
+        case bundleIdentity, bundlePath, outputClosed
         case inventoryCount(expected: Int, actual: Int)
         case rolloutCheck(String)
         var summary: String {
             switch self {
             case .contract: "The response did not match the required identity or state."
+            case .bundleIdentity: "The CLI app bundle identity could not be verified."
+            case .bundlePath: "The copied CLI path leaves its isolated bundle."
+            case .outputClosed: "The isolated runtime closed its output before replying."
             case .changed: "The test executable changed."
             case .timeout: "The test runtime did not respond in time."
             case .outputLimit: "The test output exceeded its limit."
@@ -332,7 +360,7 @@ enum CodexCompatibilityBehaviorRunner {
                 if ready < 0 { if errno == EINTR { continue }; throw Failure.contract }
                 var bytes = [UInt8](repeating: 0, count: 8_192)
                 let count = Darwin.read(fd.fd, &bytes, bytes.count)
-                guard count > 0 else { throw Failure.contract }
+                guard count > 0 else { throw Failure.outputClosed }
                 bytesSeen += count
                 guard bytesSeen <= 8_388_608 else { throw Failure.outputLimit }
                 buffer.append(contentsOf: bytes.prefix(count))

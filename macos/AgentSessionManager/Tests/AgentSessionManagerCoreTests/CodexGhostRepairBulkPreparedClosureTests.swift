@@ -407,7 +407,7 @@ final class CodexGhostRepairBulkPreparedClosureTests: XCTestCase {
         _ fixture: BulkShippingCompositionTestFixture.Value
     ) throws -> [String: Data] {
         var result: [String: Data] = [:]
-        for member in CodexGhostRepairSnapshotCanonicalFile.allCases {
+        for member in CodexGhostRepairSnapshotCanonicalFile.legacyFiles {
             let url = member.sourceURL(
                 codexHomeURL: fixture.codexHome,
                 sqliteRootURL: fixture.codexHome.appendingPathComponent("sqlite")

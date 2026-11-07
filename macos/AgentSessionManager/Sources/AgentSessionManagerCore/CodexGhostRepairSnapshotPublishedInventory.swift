@@ -90,6 +90,7 @@ struct CodexGhostRepairSnapshotPublishedManifest:
             \.rawValue
         )
         guard files.map(\.fileName) == expectedNames,
+              CodexGhostRepairSnapshotCanonicalFile.validPresence(Array(zip(profile.files, files.map(\.exists)))),
               Set(files.map(\.fileName)).count == files.count,
               acquiredAtMilliseconds >= 0,
               Self.isSHA256(sourceFingerprintHash),

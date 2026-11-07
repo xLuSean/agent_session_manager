@@ -14,7 +14,7 @@ final class CodexGhostRepairSnapshotCanonicalSourceTests: XCTestCase {
             let captured = try CodexGhostRepairSnapshotAnalysisCapture.capture(source: fixture.source,
                 in: workspace, forceStreamingForTesting: streaming)
             try captured.validateHash()
-            for (file, evidence) in zip(CodexGhostRepairSnapshotCanonicalFile.allCases, captured.files) {
+            for (file, evidence) in zip(CodexGhostRepairSnapshotCanonicalFile.legacyFiles, captured.files) {
                 if file.isVolatileSharedMemory {
                     XCTAssertFalse(evidence.exists)
                     XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.rootURL.appendingPathComponent(file.rawValue).path))
@@ -109,7 +109,7 @@ final class CodexGhostRepairSnapshotCanonicalSourceTests: XCTestCase {
         XCTAssertTrue(fingerprint.files.allSatisfy(\.exists))
         XCTAssertEqual(
             fingerprint.files.map(\.fileName),
-            CodexGhostRepairSnapshotCanonicalFile.allCases.map(\.rawValue)
+            CodexGhostRepairSnapshotCanonicalFile.legacyFiles.map(\.rawValue)
         )
         XCTAssertEqual(try fixedFileReadback(fixture), before)
     }
@@ -432,7 +432,7 @@ final class CodexGhostRepairSnapshotCanonicalSourceTests: XCTestCase {
             }
         }
 
-        for file in CodexGhostRepairSnapshotCanonicalFile.allCases {
+        for file in CodexGhostRepairSnapshotCanonicalFile.legacyFiles {
             guard file != omittedRequired,
                   file.isRequiredDatabase || includeSidecars else { continue }
             let url = file.sourceURL(
@@ -471,7 +471,7 @@ final class CodexGhostRepairSnapshotCanonicalSourceTests: XCTestCase {
     private func fixedFileReadback(_ fixture: Fixture) throws
         -> [FixedFileReadback]
     {
-        try CodexGhostRepairSnapshotCanonicalFile.allCases.compactMap { file in
+        try CodexGhostRepairSnapshotCanonicalFile.legacyFiles.compactMap { file in
             let url = file.sourceURL(
                 codexHomeURL: fixture.codexHome,
                 sqliteRootURL: fixture.sqliteRoot

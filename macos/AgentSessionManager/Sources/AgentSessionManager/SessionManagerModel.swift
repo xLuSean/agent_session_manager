@@ -427,6 +427,8 @@ struct NativeDeleteDesktopCleanupTarget: Identifiable, Equatable, Sendable {
     let state: NativeDeleteDesktopCleanupTargetState
     let category: CodexGhostRepairCategory?
     let message: String
+    var blockers: [CodexGhostRepairBulkInventoryBlocker] = []
+    var additionalCleanup: CodexGhostRepairReviewedSessionResidue? = nil
 
     var id: String { nativeSessionID }
 }
@@ -3623,7 +3625,8 @@ final class SessionManagerModel: ObservableObject {
                     nativeSessionID: id,
                     state: .eligible,
                     category: inventoryByID[id]?.category,
-                    message: inventoryByID[id]?.initiallyAbsent == true ? "Already clear." : "Ready for cleanup."
+                    message: inventoryByID[id]?.initiallyAbsent == true ? "Already clear." : "Ready for cleanup.",
+                    additionalCleanup: inventoryByID[id]?.reviewedResidue
                 )
             }
         case let .inventoryBlocked(_, _, targets, _):
@@ -3681,6 +3684,31 @@ final class SessionManagerModel: ObservableObject {
               Set(inventory.eligibleThreadIDs) == ghostRepairBulkSelection,
               ghostRepairBulkWorkflowMutationBlockedReason == nil else { return false }
         return true
+    }
+
+    private var additionalReviewHandoff: (NativeDeleteDesktopCleanupContext, CodexDesktopCleanupHandoff)? {
+        guard let inventory = ghostRepairBulkInventory,
+              inventory.snapshotReference == ghostRepairBulkSnapshotReferenceDraft else { return nil }
+        let context: NativeDeleteDesktopCleanupContext
+        let handoff: CodexDesktopCleanupHandoff
+        switch nativeDeleteDesktopCleanupState {
+        case let .inventoryBlocked(owner, scope, targets, _):
+            guard inventory.manualReviewEnabled || targets.contains(where: { $0.additionalCleanup != nil }) else { return nil }
+            (context, handoff) = (owner, scope)
+        case let .inventoryReady(owner, scope):
+            guard inventory.manualReviewEnabled else { return nil }
+            (context, handoff) = (owner, scope)
+        default:
+            return nil
+        }
+        guard nativeDeleteDesktopCleanupHandoffMatches(handoff, context: context),
+              inventory.items.map(\.threadID).sorted() == handoff.nativeSessionIDs else { return nil }
+        return (context, handoff)
+    }
+
+    var canReviewNativeDeleteAdditionalCleanup: Bool {
+        additionalReviewHandoff != nil && ghostRepairCleanupState == .idle
+            && ghostRepairBulkWorkflowMutationBlockedReason == nil
     }
 
     var nativeDeleteDesktopCleanupStatusBlockedReason: String? {
@@ -4840,9 +4868,27 @@ final class SessionManagerModel: ObservableObject {
                 handoff,
                 context: context
               ) else { return }
+        classifyNativeDeleteCleanupTargets(context: context, handoff: handoff, inventory: inventory)
+    }
+
+    private func classifyNativeDeleteCleanupTargets(
+        context: NativeDeleteDesktopCleanupContext,
+        handoff: CodexDesktopCleanupHandoff,
+        inventory: CodexGhostRepairBulkInventory
+    ) {
         let inventoryByID = Dictionary(
             uniqueKeysWithValues: inventory.items.map { ($0.threadID, $0) }
         )
+        // Offer review only for rows Core can classify with the captured evidence.
+        // This comparison never changes the active inventory or selection.
+        var reviewable: [String: CodexGhostRepairReviewedSessionResidue] = [:]
+        if !inventory.manualReviewEnabled, inventory.blockedItemCount > 0,
+           inventoryByID.keys.sorted() == handoff.nativeSessionIDs,
+           let reviewed = try? inventory.reviewingKnownResidue(true) {
+            for item in reviewed.items where item.selectable {
+                reviewable[item.threadID] = item.reviewedResidue
+            }
+        }
         let targets = handoff.nativeSessionIDs.map { id in
             guard let item = inventoryByID[id] else {
                 return NativeDeleteDesktopCleanupTarget(
@@ -4858,7 +4904,9 @@ final class SessionManagerModel: ObservableObject {
                     nativeSessionID: id,
                     state: .blocked,
                     category: item.category,
-                    message: "This requested ID is \(item.disposition.rawValue), so the exact scope cannot proceed."
+                    message: item.retentionExplanation ?? (item.disposition == .notGhost
+                        ? "Codex still lists this conversation." : "The scan could not verify this conversation for cleanup."),
+                    blockers: item.blockers, additionalCleanup: reviewable[id]
                 )
             }
             return NativeDeleteDesktopCleanupTarget(
@@ -4867,17 +4915,19 @@ final class SessionManagerModel: ObservableObject {
                 category: category,
                 message: item.initiallyAbsent == true
                     ? "Already clear; retained in the exact batch for final absence verification."
-                    : "Eligible in the exact canonical Delete cleanup scope."
+                    : "Eligible in the exact canonical Delete cleanup scope.",
+                additionalCleanup: item.reviewedResidue
             )
         }
-        guard targets.allSatisfy({ $0.state == .eligible }) else {
+        let blockedCount = targets.count { $0.state == .blocked }
+        guard blockedCount == 0 else {
             ghostRepairBulkSelection.removeAll()
             isShowingSelectedGhostRepairBulkItemsOnly = false
             nativeDeleteDesktopCleanupState = .inventoryBlocked(
                 context,
                 handoff,
                 targets: targets,
-                message: "Every requested native session ID must be verified already clear or an eligible classified ghost. Nothing was selected and no smaller Preview may be built."
+                message: "\(blockedCount) of \(targets.count) still need attention. All conversations in this deletion must pass before cleanup can continue."
             )
             return
         }
@@ -5097,14 +5147,19 @@ final class SessionManagerModel: ObservableObject {
     func setGhostRepairManualReviewEnabled(_ enabled: Bool) {
         guard ghostRepairCleanupState == .idle,
               ghostRepairBulkWorkflowMutationBlockedReason == nil,
-              nativeDeleteDesktopCleanupSelectionBlockedReason == nil,
-              let inventory = ghostRepairBulkInventory else { return }
+              let inventory = ghostRepairBulkInventory,
+              enabled != inventory.manualReviewEnabled else { return }
+        let owner = additionalReviewHandoff
+        guard nativeDeleteDesktopCleanupSelectionBlockedReason == nil || owner != nil else { return }
         do {
             let reviewed = try inventory.reviewingKnownResidue(enabled)
             ghostRepairBulkSelection.removeAll()
             isShowingSelectedGhostRepairBulkItemsOnly = false
             invalidateGhostRepairBulkPreparedEvidence()
             ghostRepairBulkInventoryState = .ready(reviewed)
+            if let (context, handoff) = owner {
+                classifyNativeDeleteCleanupTargets(context: context, handoff: handoff, inventory: reviewed)
+            }
         } catch {
             errorMessage = "Manual review requires a fresh, verified scan."
         }
@@ -7354,6 +7409,7 @@ final class SessionManagerModel: ObservableObject {
                     ".codex",
                     isDirectory: true
                 ),
+                productionCatalog: CodexCompatibilityDesktopApplication.installedUsesProductionCatalog,
                 backupVolumeProbeURL: homeURL
             )
         )
@@ -8575,6 +8631,7 @@ final class SessionManagerModel: ObservableObject {
         guard case let .inventoryReady(context, handoff) = nativeDeleteDesktopCleanupState,
               context.canonicalDeleteReportID == report.id,
               let inventory = ghostRepairBulkInventory,
+              inventory.items.allSatisfy({ $0.reviewedResidue == nil }),
               ghostRepairBulkSelection == Set(handoff.nativeSessionIDs) else { return }
 
         // The original Delete confirmation includes Desktop cleanup. Shutdown

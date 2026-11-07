@@ -273,7 +273,7 @@ struct SessionInspectorView: View {
     private func protectionEvidenceRow(_ evidence: ProtectionEvidence) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Label(evidence.kind.label, systemImage: protectionSymbol(evidence.verdict))
+                Label(evidence.label, systemImage: protectionSymbol(evidence.verdict))
                 Spacer()
                 Text(evidence.verdict.label)
                     .foregroundStyle(protectionColor(evidence.verdict))

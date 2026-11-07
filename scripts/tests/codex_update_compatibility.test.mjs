@@ -13,6 +13,7 @@ import {
   GHOST_REPAIR_DATABASE_CONTRACT_V34,
   GHOST_REPAIR_DATABASE_CONTRACT_V34_EXTENDED,
   GHOST_REPAIR_DATABASE_CONTRACT_V34_ASYNC,
+  GHOST_REPAIR_DATABASE_CONTRACT_V166_PRODUCTION,
   DESKTOP_RUNTIME_RELATIVE_PATHS,
   resolveDesktopRuntimeExecutable,
   UNADMITTED_GHOST_REPAIR_V33_CANDIDATE,
@@ -85,6 +86,15 @@ test("same version cannot accept partial or arbitrary Desktop schema additions",
   assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.158.0-alpha.2.1", databases }).verdict, "blocked_schema_drift");
   databases.desktop.tables.automations.push("auto_archive", "unreviewed");
   assert.equal(evaluateGhostRepairContract({ runtimeVersion: "0.158.0-alpha.2.1", databases }).verdict, "blocked_schema_drift");
+});
+
+test("production catalog audit distinguishes an absent optional summary store from an unavailable one", () => {
+  const databases = compatibleDatabases(GHOST_REPAIR_DATABASE_CONTRACT_V166_PRODUCTION.databases);
+  const evaluate = () => evaluateGhostRepairContract({ runtimeVersion: "0.166.0-alpha.5.1", databases }).verdict;
+  databases.summaries = { fileName: "codex-thread-summaries.db", absent: true };
+  assert.equal(evaluate(), "ready_current_build");
+  delete databases.summaries;
+  assert.equal(evaluate(), "blocked_inspection_unavailable");
 });
 
 function compatibleDatabases(contract = GHOST_REPAIR_DATABASE_CONTRACT) {

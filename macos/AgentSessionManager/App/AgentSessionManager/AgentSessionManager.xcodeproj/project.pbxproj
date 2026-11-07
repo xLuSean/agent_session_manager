@@ -33,6 +33,7 @@
 		A20000000000000000000001 /* SessionManagerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000023 /* SessionManagerModel.swift */; };
 		A20000000000000000000002 /* AgentSessionManagerCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* AgentSessionManagerCore */; };
 		A20000000000000000000003 /* BulkShippingCompositionTestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* BulkShippingCompositionTestFixture.swift */; };
+		A20000000000000000000006 /* CodexRealtimeHistoryTestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* CodexRealtimeHistoryTestFixture.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -60,6 +61,7 @@
 		A10000000000000000000031 /* AgentSessionManager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentSessionManager.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000012 /* AgentSessionManagerAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentSessionManagerAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000013 /* BulkShippingCompositionTestFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Tests/AgentSessionManagerCoreTests/Support/BulkShippingCompositionTestFixture.swift; sourceTree = "<group>"; };
+		A20000000000000000000016 /* CodexRealtimeHistoryTestFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../../Tests/AgentSessionManagerCoreTests/Support/CodexRealtimeHistoryTestFixture.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -102,6 +104,7 @@
 				A10000000000000000000032 /* AgentSessionManager */,
 				A20000000000000000000032 /* AgentSessionManagerAppTests */,
 				A20000000000000000000013 /* BulkShippingCompositionTestFixture.swift */,
+				A20000000000000000000016 /* CodexRealtimeHistoryTestFixture.swift */,
 				A10000000000000000000021 /* AgentSessionManagerApp.swift */,
 				A10000000000000000000022 /* ContentView.swift */,
 				A10000000000000000000023 /* SessionManagerModel.swift */,
@@ -278,6 +281,7 @@
 				A20000000000000000000004 /* NativeDeleteReportSheetLayout.swift in Sources */,
 				A20000000000000000000005 /* NativeDeleteResultCard.swift in Sources */,
 				A20000000000000000000003 /* BulkShippingCompositionTestFixture.swift in Sources */,
+				A20000000000000000000006 /* CodexRealtimeHistoryTestFixture.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

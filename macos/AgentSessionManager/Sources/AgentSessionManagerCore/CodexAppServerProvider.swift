@@ -48,6 +48,17 @@ struct CodexGitInfo: Codable, Hashable, Sendable {
     let sha: String?
 }
 
+struct CodexThreadSection: Codable, Hashable, Sendable {
+    let id: String
+    let name: String
+}
+
+enum CodexModernThreadMetadata {
+    static func required(runtimeVersion: String?) -> Bool {
+        ["0.164.0", "0.166.0-alpha.5.1"].contains(runtimeVersion ?? "")
+    }
+}
+
 struct CodexThreadRecord: Codable, Hashable, Sendable {
     let id: String
     let sessionId: String
@@ -71,10 +82,59 @@ struct CodexThreadRecord: Codable, Hashable, Sendable {
     /// Only an exact metadata read with an explicit forkedFromId field can
     /// establish this; state-DB-only list responses omit fork metadata.
     var forkHistoryReadComplete = false
+    var section: CodexThreadSection? = nil
+    var sectionReadComplete = false
+    var projectId: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, sessionId, parentThreadId, preview, ephemeral, modelProvider,
-             createdAt, updatedAt, status, cwd, cliVersion, name, isPinned, gitInfo, forkedFromId
+             createdAt, updatedAt, status, cwd, cliVersion, name, isPinned, gitInfo, forkedFromId, section, projectId
+    }
+}
+
+
+extension CodexThreadRecord {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        preview = try c.decode(String.self, forKey: .preview)
+        ephemeral = try c.decode(Bool.self, forKey: .ephemeral)
+        modelProvider = try c.decode(String.self, forKey: .modelProvider)
+        createdAt = try c.decode(Int64.self, forKey: .createdAt)
+        updatedAt = try c.decode(Int64.self, forKey: .updatedAt)
+        status = try c.decode(CodexThreadStatus.self, forKey: .status)
+        cwd = try c.decode(String.self, forKey: .cwd)
+        cliVersion = try c.decode(String.self, forKey: .cliVersion)
+        parentThreadId = try c.decodeIfPresent(String.self, forKey: .parentThreadId)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned)
+        gitInfo = try c.decodeIfPresent(CodexGitInfo.self, forKey: .gitInfo)
+        forkedFromId = try c.decodeIfPresent(String.self, forKey: .forkedFromId)
+        projectId = try c.decodeIfPresent(String.self, forKey: .projectId)
+        sectionReadComplete = c.contains(.section)
+        section = try c.decodeIfPresent(CodexThreadSection.self, forKey: .section)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(sessionId, forKey: .sessionId)
+        try c.encode(preview, forKey: .preview)
+        try c.encode(ephemeral, forKey: .ephemeral)
+        try c.encode(modelProvider, forKey: .modelProvider)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(updatedAt, forKey: .updatedAt)
+        try c.encode(status, forKey: .status)
+        try c.encode(cwd, forKey: .cwd)
+        try c.encode(cliVersion, forKey: .cliVersion)
+        try c.encodeIfPresent(parentThreadId, forKey: .parentThreadId)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encodeIfPresent(isPinned, forKey: .isPinned)
+        try c.encodeIfPresent(gitInfo, forKey: .gitInfo)
+        try c.encodeIfPresent(forkedFromId, forKey: .forkedFromId)
+        try c.encodeIfPresent(projectId, forKey: .projectId)
+        if sectionReadComplete { try c.encode(section, forKey: .section) }
     }
 }
 
@@ -200,6 +260,25 @@ struct CodexInventorySnapshot: Hashable, Sendable {
     let trustConfigurationAvailable: Bool
     let trustConfigurationError: String?
     var compatibilityBinding: CodexCompatibilityBinding? = nil
+
+    /// Ghost protection keeps old persisted pins as well as every live section.
+    /// A missing section field in either inventory never becomes a clearance.
+    var protectedThreadIDs: Set<String> {
+        desktopPinnedThreadIDs.union((active + archived + descendantRecords).filter { $0.section != nil }.map(\.id))
+    }
+    var protectedThreadInventoryComplete: Bool {
+        let records = active + archived + descendantRecords
+        guard desktopPinStateAvailable else { return false }
+        guard CodexModernThreadMetadata.required(runtimeVersion: runtimeVersion) || records.contains(where: { $0.sectionReadComplete }) else { return true }
+        var seen: [String: CodexThreadRecord] = [:]
+        for record in records {
+            guard record.sectionReadComplete,
+                  record.section.map({ UUID(uuidString: $0.id) != nil }) ?? true else { return false }
+            if let previous = seen[record.id], previous.section?.id != record.section?.id { return false }
+            seen[record.id] = record
+        }
+        return true
+    }
 }
 
 struct CodexDesktopProject: Codable, Hashable, Sendable {
@@ -988,6 +1067,7 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
             id: requestID,
             method: "initialize",
             params: [
+                "capabilities": ["experimentalApi": CodexModernThreadMetadata.required(runtimeVersion: runtimeVersion)],
                 "clientInfo": [
                     "name": "agent_session_manager",
                     "title": "Agent Session Manager",
@@ -1057,6 +1137,24 @@ public actor CodexAppServerClient: CodexInventorySource, CodexArchiveSource, Cod
         } catch {
             projectCatalogError = error.localizedDescription
             desktopStateAtStartError = error.localizedDescription
+        }
+
+        if CodexModernThreadMetadata.required(runtimeVersion: runtimeVersion) {
+            do {
+                projects = try CodexProjectCatalog.collect { cursor in
+                    var params: [String: Any] = ["limit": 100, "sortKey": "position", "sortDirection": "asc"]
+                    if let cursor { params["cursor"] = cursor }
+                    defer { requestID += 1 }
+                    return try request(process: process, input: input.fileHandleForWriting, reader: reader,
+                        id: requestID, method: "project/list", params: params)
+                }
+                projectCatalogAvailable = true
+                projectCatalogError = nil
+            } catch {
+                projects = []
+                projectCatalogAvailable = false
+                projectCatalogError = "Official project inventory could not be verified."
+            }
         }
 
         var trustFolders: [String: FolderTrustState] = [:]
@@ -1724,7 +1822,7 @@ public actor CodexAppServerProvider: SessionProvider, ExactSessionReadbackProvid
                 for: record.cwd,
                 trustFolders: snapshot.trustFolders
             )
-            let project = matchingProject(for: record.cwd, projects: snapshot.projects)
+            let project = matchingProject(for: record.cwd, projects: snapshot.projects, explicitProjectID: record.projectId)
             var protection = (try? ProtectionAuthorityPolicy.resolve(
                 system: .codex,
                 observations: protectionObservations(
@@ -1735,6 +1833,9 @@ public actor CodexAppServerProvider: SessionProvider, ExactSessionReadbackProvid
                     allGraphPinStatesKnown: allGraphPinStatesKnown
                 )
             )) ?? unavailableProtection
+            if record.sectionReadComplete || CodexModernThreadMetadata.required(runtimeVersion: snapshot.runtimeVersion) {
+                protection.usesSectionProtection = true
+            }
             if record.localSupplement?.hasCanonicalChildren == true {
                 protection.hasPinnedDescendantKnown = false
             }
@@ -1810,7 +1911,7 @@ public actor CodexAppServerProvider: SessionProvider, ExactSessionReadbackProvid
                     && record.localSupplement?.hasCanonicalChildren != true,
                 projectID: matchingProject(
                     for: record.cwd,
-                    projects: snapshot.projects
+                    projects: snapshot.projects, explicitProjectID: record.projectId
                 )?.id,
                 workingDirectory: record.cwd
             )
@@ -1864,7 +1965,9 @@ public actor CodexAppServerProvider: SessionProvider, ExactSessionReadbackProvid
                 ? "Folder trust is read separately from config/read and matched by the longest configured ancestor path."
                 : "Folder trust is unavailable; thread cwd is shown only as a working folder.",
             snapshot.projectCatalogAvailable
-                ? "Projects come from Codex Desktop local-projects and are matched to thread cwd by the longest project root path."
+                ? (CodexModernThreadMetadata.required(runtimeVersion: runtimeVersion)
+                    ? "Projects come from the official project/list catalog. Explicit project IDs take priority over working-folder matching."
+                    : "Projects come from Codex Desktop local-projects and are matched to thread cwd by the longest project root path.")
                 : "Codex Desktop project catalog is unavailable; sessions are not assigned to projects.",
             runtimeVersion.map {
                 "Runtime contract is bound to `\($0)` reported by `--version` from the exact selected Codex executable; initialize userAgent identifies this client and is diagnostic only."
@@ -2038,6 +2141,14 @@ public actor CodexAppServerProvider: SessionProvider, ExactSessionReadbackProvid
         for record: CodexThreadRecord,
         snapshot: CodexInventorySnapshot
     ) -> Bool? {
+        if record.sectionReadComplete || CodexModernThreadMetadata.required(runtimeVersion: snapshot.runtimeVersion) {
+            guard record.sectionReadComplete,
+                  record.section.map({ UUID(uuidString: $0.id) != nil }) ?? true else { return nil }
+            // Different list passes must agree before clearing protection.
+            let copies = (snapshot.active + snapshot.archived + snapshot.descendantRecords).filter { $0.id == record.id }
+            guard copies.allSatisfy({ $0.sectionReadComplete && $0.section?.id == record.section?.id }) else { return nil }
+            return record.section != nil
+        }
         let desktopValue = snapshot.desktopPinStateAvailable
             ? snapshot.desktopPinnedThreadIDs.contains(record.id)
             : nil
@@ -2063,7 +2174,8 @@ public actor CodexAppServerProvider: SessionProvider, ExactSessionReadbackProvid
         return ProtectionAuthorityObservation(
             kind: .pinned,
             isProtected: value,
-            source: record.isPinned == nil
+            source: record.sectionReadComplete || CodexModernThreadMetadata.required(runtimeVersion: snapshot.runtimeVersion)
+                ? .codexThreadSection : record.isPinned == nil
                 ? .codexDesktopPinnedThreadIDs
                 : .codexThreadListPin,
             scope: .providerPersistentState
@@ -2106,8 +2218,14 @@ public actor CodexAppServerProvider: SessionProvider, ExactSessionReadbackProvid
 
     private static func matchingProject(
         for workingDirectory: String,
-        projects: [CodexDesktopProject]
+        projects: [CodexDesktopProject], explicitProjectID: String? = nil
     ) -> SessionProject? {
+        if let id = explicitProjectID {
+            guard let project = projects.first(where: { $0.id == id }) else { return nil }
+            let root = project.rootPaths.first(where: { workingDirectory == $0 || workingDirectory.hasPrefix($0 + "/") })
+                ?? project.rootPaths.first ?? workingDirectory
+            return SessionProject(id: project.id, name: project.name, rootPath: root)
+        }
         let cwd = URL(fileURLWithPath: workingDirectory).standardized.path
         return projects.flatMap { project in
             project.rootPaths.compactMap { rawRoot -> (SessionProject, Int)? in

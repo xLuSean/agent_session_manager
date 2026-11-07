@@ -15,6 +15,12 @@ final class CodexDesktopExtendedCleanupTests: XCTestCase {
         try await verifyMixed148Cleanup(runtimeVersion: "0.157.1", profile: .v160DesktopV34Async)
     }
 
+    func testV166Mixed148CleanupPreservesSettingsAndColdReadback() async throws {
+        for runtime in ["0.164.0", "0.166.0-alpha.5.1"] {
+            try await verifyMixed148Cleanup(runtimeVersion: runtime, profile: .v166DesktopV34Realtime)
+        }
+    }
+
     private func verifyMixed148Cleanup(runtimeVersion: String,
                                       profile: CodexGhostRepairSnapshotSourceProfile = .v156DesktopV34Extended) async throws {
         let fixture = try BulkShippingCompositionTestFixture.make(itemCount: 148, desktopSchema: 34,
@@ -79,6 +85,35 @@ final class CodexDesktopExtendedCleanupTests: XCTestCase {
         }
     }
 
+
+    func testV166NewRealtimeReferenceBlocksFrozenCleanupAndIsPreserved() async throws {
+        let fixture = try BulkShippingCompositionTestFixture.make(itemCount: 2, desktopSchema: 34,
+            profile: .v166DesktopV34Realtime, runtimeVersion: "0.164.0")
+        let history = fixture.codexHome.appendingPathComponent("thread_history_1.sqlite")
+        let id = try XCTUnwrap(fixture.livePlan.selectedItems.first?.threadID)
+        try execute("INSERT INTO thread_realtime_items VALUES ('\(id)', 'item', 0, 0, 'realtime_session_started', '{}')", at: history)
+        let historyBefore = try Data(contentsOf: history)
+        let observed = try CodexGhostRepairBulkLiveMixedMutator.inspect(selectedItems: fixture.livePlan.selectedItems,
+            resolution: fixture.bundle.resolveForPreflight())
+        XCTAssertEqual(observed.items.first { $0.threadID == id }?.referenceCount, 1)
+        let result = try await fixture.liveMutator().executeOnce(plan: fixture.livePlan, claim: fixture.liveClaim, attempt: fixture.liveAttempt)
+        XCTAssertEqual(result, .notAttempted)
+        XCTAssertEqual(try scalar("SELECT count(*) FROM local_thread_catalog WHERE host_id = 'local'", at: fixture.desktopURL), 2)
+        XCTAssertEqual(try Data(contentsOf: history), historyBefore)
+    }
+
+    func testV166FailureRollsBackAndChangedHistoryTriggerFailsClosed() async throws {
+        let fixture = try BulkShippingCompositionTestFixture.make(itemCount: 2, desktopSchema: 34,
+            profile: .v166DesktopV34Realtime, runtimeVersion: "0.164.0")
+        let result = try await fixture.liveMutator(fault: .beforeCommit).executeOnce(plan: fixture.livePlan,
+            claim: fixture.liveClaim, attempt: fixture.liveAttempt)
+        XCTAssertEqual(result, .explicitFailure)
+        XCTAssertEqual(try scalar("SELECT count(*) FROM local_thread_catalog WHERE host_id = 'local'", at: fixture.desktopURL), 2)
+        let history = fixture.codexHome.appendingPathComponent("thread_history_1.sqlite")
+        try execute("DROP TRIGGER thread_realtime_items_projection_cleanup; CREATE TRIGGER thread_realtime_items_projection_cleanup AFTER DELETE ON thread_history_projection_state BEGIN DELETE FROM thread_realtime_items; END", at: history)
+        XCTAssertThrowsError(try CodexGhostRepairBulkLiveMixedMutator.inspect(selectedItems: fixture.livePlan.selectedItems,
+            resolution: fixture.bundle.resolveForPreflight()))
+    }
 
     private func scalar(_ sql: String, at url: URL) throws -> Int {
         try BulkShippingCompositionTestFixture.scalar(sql, at: url)

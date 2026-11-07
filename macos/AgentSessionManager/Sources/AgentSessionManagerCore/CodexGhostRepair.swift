@@ -344,6 +344,7 @@ public struct CodexGhostRepairOpenHandleOwnerEvidence:
     Sendable
 {
     public let databaseRole: CodexGhostRepairDatabaseRole
+    var productionCatalog: Bool? = nil
     public let processIdentifier: Int32
     public let parentProcessIdentifier: Int32?
     public let processName: String
@@ -388,14 +389,15 @@ public struct CodexGhostRepairOpenHandleOwnerEvidence:
         } else {
             parent = "unavailable"
         }
+        let fileName = productionCatalog == true ? databaseRole.databaseFileName.replacingOccurrences(of: "-dev.db", with: ".db") : databaseRole.databaseFileName
         let executable = executableName ?? processName
         let descriptorNoun = fileDescriptorCount == 1
             ? "open file descriptor"
             : "open file descriptors"
         if let ownerApplication {
-            return "\(ownerApplication.closeInstruction) \(databaseRole.userFacingDescription) (\(databaseRole.databaseFileName)) is held by PID \(processIdentifier) with \(fileDescriptorCount) \(descriptorNoun)."
+            return "\(ownerApplication.closeInstruction) \(databaseRole.userFacingDescription) (\(fileName)) is held by PID \(processIdentifier) with \(fileDescriptorCount) \(descriptorNoun)."
         }
-        return "\(databaseRole.userFacingDescription) (\(databaseRole.databaseFileName)): process \(processName) · executable \(executable) · PID \(processIdentifier) · parent \(parent) · \(fileDescriptorCount) \(descriptorNoun)"
+        return "\(databaseRole.userFacingDescription) (\(fileName)): process \(processName) · executable \(executable) · PID \(processIdentifier) · parent \(parent) · \(fileDescriptorCount) \(descriptorNoun)"
     }
 }
 

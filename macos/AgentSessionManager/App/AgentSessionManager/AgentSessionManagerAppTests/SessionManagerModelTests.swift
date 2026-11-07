@@ -2093,7 +2093,7 @@ final class SessionManagerModelTests: XCTestCase {
         }
         XCTAssertEqual(
             message,
-            "Snapshot operating conditions are blocked: Codex helper process is still running (2); ChatGPT main application process is still running (1); codex-dev.db still has an open handle; Legacy codex-history-snapshots-dev.db still has an open handle; Snapshot capacity is insufficient."
+            "Snapshot operating conditions are blocked: Codex helper process is still running (2); ChatGPT main application process is still running (1); The Desktop catalog still has an open handle; The legacy Desktop history database still has an open handle; Snapshot capacity is insufficient."
         )
 
         let metadata = SessionManagerModel.ghostRepairReviewDiagnosticMetadata(
@@ -3337,6 +3337,116 @@ final class SessionManagerModelTests: XCTestCase {
         XCTAssertEqual(executions, 1)
     }
 
+    private func additionalCleanupInventory(hardBlock: Bool = false) throws -> CodexGhostRepairBulkInventory {
+        let digest = "sha256:" + String(repeating: "a", count: 64)
+        let pausedRuns: Set<Int> = [1, 21, 23, 25, 27, 29, 31, 33]
+        let targets = (0..<158).map { index in
+            let hasRun = index < 147
+            let hasSummary = index < 10
+            let rowContract: CodexGhostRepairSnapshotAnalysisRowContract
+            if pausedRuns.contains(index) {
+                rowContract = .unsupported
+            } else {
+                rowContract = hasRun ? .categoryBEligible : .categoryAEligible
+            }
+            var target = CodexGhostRepairSnapshotAnalysisTargetEvidence(
+                threadID: BulkShippingCompositionTestFixture.identifier(index), catalogRowDigests: [digest],
+                automationRunRowDigests: hasRun ? [digest] : [], automationStableFieldsDigests: hasRun ? [digest] : [],
+                automationDefinitionRowDigests: hasRun ? [digest] : [],
+                references: .init(inbox: 0, timeline: 0, summaries: hasSummary ? 1 : 0, canonicalState: 0,
+                                  threadTurns: 0, threadItems: 0, historyProjection: 0,
+                                  realtimeItems: hardBlock && index == 157 ? 1 : 0),
+                rowContract: rowContract)
+            if hasSummary { target.summaryRowDigests = [digest] }
+            if pausedRuns.contains(index) { target.pausedAutomationReviewable = true }
+            return target
+        }
+        let schema = CodexGhostRepairDatabaseSchemaProfile.desktopV34Realtime
+        return try CodexGhostRepairBulkInventoryBuilder.build(input: .init(
+            snapshotReference: UUID().uuidString.lowercased(),
+            sourceLayoutIdentifier: CodexGhostRepairSnapshotSourceProfile.v166DesktopV34Realtime.identifier,
+            sourceFingerprintHash: digest, manifestHash: digest,
+            databases: CodexGhostRepairSnapshotAnalysisDatabase.allCases.map {
+                .init(database: $0, schemaVersion: schema.databaseVersions[$0]!, integrityCheckPassed: true,
+                      foreignKeyViolationCount: 0, schemaProfileIdentifier: schema.identifier)
+            }, targets: targets, protectionEvidence: targets.map {
+                .init(threadID: $0.threadID, inventoryComplete: true, activeInventoryPresent: false,
+                      archivedInventoryPresent: false, exactReadNotLoaded: true, exactReadErrorCode: -32600,
+                      pinned: false, descendantCount: 0)
+            }, authority: .init(catalogRevision: 10, observationSequence: 20, watermarkUpdatedAt: 30,
+                                metadataRowDigest: digest, localSyncRowDigest: digest)))
+    }
+
+    func testDeletedBatchAdditionalCleanupRequiresExplicitReviewAndFreshConfirmation() async throws {
+        let fixture = try makeIntegratedDeleteFixture(selectedCount: 158, cleanupInventory: additionalCleanupInventory())
+        let model = fixture.model
+        let ids = Set(fixture.report.items.map(\.nativeSessionID))
+        await model.continueFreshNativeDeleteCleanup(report: fixture.report, confirmedPreviewID: fixture.report.previewID,
+                                                    confirmedNativeSessionIDs: Array(ids))
+        XCTAssertEqual(model.nativeDeleteDesktopCleanupTargets.filter { $0.state == .blocked }.count, 17)
+        XCTAssertTrue(model.canReviewNativeDeleteAdditionalCleanup)
+        XCTAssertFalse(model.canContinueNativeDeleteDesktopCleanup)
+        XCTAssertTrue(model.ghostRepairBulkSelection.isEmpty)
+        let originalDigest = try XCTUnwrap(model.ghostRepairBulkInventory?.inventoryDigest)
+        model.setGhostRepairManualReviewEnabled(true)
+        XCTAssertTrue(model.canContinueNativeDeleteDesktopCleanup)
+        XCTAssertEqual(model.ghostRepairBulkSelection, ids)
+        XCTAssertEqual(model.ghostRepairCleanupState, .idle)
+        await model.confirmGhostCleanup(selectedIDs: ids, inventoryDigest: originalDigest)
+        XCTAssertEqual(model.ghostRepairCleanupState, .idle, "A pre-review confirmation cannot be reused")
+        model.setGhostRepairManualReviewEnabled(false)
+        XCTAssertFalse(model.canContinueNativeDeleteDesktopCleanup)
+        XCTAssertTrue(model.ghostRepairBulkSelection.isEmpty)
+        model.setGhostRepairManualReviewEnabled(true)
+        model.clearGhostRepairBulkSelection()
+        XCTAssertEqual(model.ghostRepairBulkSelection, ids)
+        await model.confirmGhostCleanup(selectedIDs: ids, inventoryDigest: try XCTUnwrap(model.ghostRepairBulkInventory?.inventoryDigest))
+        XCTAssertEqual(model.ghostRepairCleanupState, .awaitingShutdown)
+        guard case let .saved(preview, _) = model.ghostRepairBulkPreviewState else { return XCTFail("Missing reviewed preview") }
+        XCTAssertEqual(Set(preview.selectedItems.map(\.threadID)), ids)
+        let reviewed = preview.selectedItems.compactMap(\.reviewedResidue)
+        XCTAssertEqual(reviewed.count, 17)
+        XCTAssertEqual(reviewed.flatMap(\.summaryRowDigests).count, 10)
+        XCTAssertEqual(reviewed.filter(\.pausedAutomation).count, 8)
+        let executions = await fixture.repair.executionRequestCount()
+        XCTAssertEqual(executions, 0)
+    }
+
+    func testDeletedBatchAdditionalCleanupPreservesHardBlockAndRejectsWiderScan() async throws {
+        for selectedCount in [158, 157] {
+            let fixture = try makeIntegratedDeleteFixture(selectedCount: selectedCount, cleanupInventory: additionalCleanupInventory(hardBlock: true))
+            let model = fixture.model
+            await model.continueFreshNativeDeleteCleanup(report: fixture.report, confirmedPreviewID: fixture.report.previewID,
+                                                        confirmedNativeSessionIDs: fixture.report.items.map(\.nativeSessionID))
+            XCTAssertEqual(model.canReviewNativeDeleteAdditionalCleanup, selectedCount == 158)
+            model.setGhostRepairManualReviewEnabled(true)
+            XCTAssertFalse(model.canContinueNativeDeleteDesktopCleanup)
+            XCTAssertTrue(model.ghostRepairBulkSelection.isEmpty)
+            XCTAssertEqual(model.ghostRepairBulkInventory?.manualReviewEnabled, selectedCount == 158)
+            if selectedCount == 158 {
+                let blocked = model.nativeDeleteDesktopCleanupTargets.filter { $0.state == .blocked }
+                XCTAssertEqual(blocked.count, 1)
+                XCTAssertEqual(blocked.first?.blockers, [.sideReferencesPresent])
+                XCTAssertEqual(model.nativeDeleteDesktopCleanupTargets.compactMap(\.additionalCleanup).count, 17)
+            }
+        }
+    }
+
+    func testPreviouslyReviewedScanCannotUseOriginalDeleteConfirmationForAdditionalCleanup() async throws {
+        let reviewed = try additionalCleanupInventory().reviewingKnownResidue(true)
+        let persisted = try JSONDecoder().decode(CodexGhostRepairBulkInventory.self, from: JSONEncoder().encode(reviewed))
+        XCTAssertFalse(persisted.manualReviewEnabled, "The mode flag is in-memory evidence")
+        for inventory in [reviewed, persisted] {
+            let fixture = try makeIntegratedDeleteFixture(selectedCount: 158, cleanupInventory: inventory)
+            await fixture.model.continueFreshNativeDeleteCleanup(report: fixture.report, confirmedPreviewID: fixture.report.previewID,
+                                                                confirmedNativeSessionIDs: fixture.report.items.map(\.nativeSessionID))
+            XCTAssertTrue(fixture.model.canContinueNativeDeleteDesktopCleanup)
+            XCTAssertEqual(fixture.model.ghostRepairCleanupState, .idle)
+            let receipts = await fixture.receipt.requestCount()
+            XCTAssertEqual(receipts, 0)
+        }
+    }
+
     func testFreshDeleteKeepsCanonicalResultWhenCleanupShutdownCheckFails() async throws {
         let fixture = try makeIntegratedDeleteFixture(reviewBlocked: "Codex is still running.")
         await fixture.model.continueFreshNativeDeleteCleanup(
@@ -3427,14 +3537,15 @@ final class SessionManagerModelTests: XCTestCase {
     private func makeIntegratedDeleteFixture(
         partial: Bool = false, reviewBlocked: String? = nil,
         executionUnknown: Bool = false, noResidue: Bool = false,
-        selectedCount: Int = 148, initiallyClearCount: Int = 0
+        selectedCount: Int = 148, initiallyClearCount: Int = 0,
+        cleanupInventory: CodexGhostRepairBulkInventory? = nil
     ) throws -> (model: SessionManagerModel, report: NativeDeleteReport,
                  receipt: AppTestDynamicGhostRepairBulkConfirmationReceiptCoordinator,
                  repair: AppTestDynamicGhostRepairBulkRepairCoordinator) {
         let base = AppTestGhostRepairBulkFixture.exact148Inventory
         let initiallyClearIDs = Set(base.items.filter { $0.category == .ordinary }
             .prefix(initiallyClearCount).map(\.threadID))
-        let inventory = CodexGhostRepairBulkInventory(
+        let inventory = cleanupInventory ?? CodexGhostRepairBulkInventory(
             snapshotReference: base.snapshotReference, sourceLayoutIdentifier: base.sourceLayoutIdentifier,
             items: base.items.map { item in
                 var copy = item
@@ -3442,7 +3553,8 @@ final class SessionManagerModelTests: XCTestCase {
                 return copy
             }, inventoryDigest: base.inventoryDigest
         )
-        let selectedIDs = Array(inventory.eligibleThreadIDs.prefix(selectedCount))
+        let reportIDs = cleanupInventory?.items.map(\.threadID) ?? inventory.eligibleThreadIDs
+        let selectedIDs = Array(reportIDs.prefix(selectedCount))
         var items = selectedIDs.map { ($0, PersistentItemOutcome.success, NativeSessionState.absent) }
         if partial {
             items.append((UUID().uuidString.lowercased(), .failure, .absent))
@@ -8031,7 +8143,20 @@ private actor AppTestGhostRepairBulkInventoryCoordinator:
             )
         }
         let returnedInventory: CodexGhostRepairBulkInventory
-        if requestBoundScanReference {
+        if requestBoundScanReference, let source = inventory.sourceEvidence {
+            // A production scan binds the evidence, not just the displayed rows, to its request.
+            let input = CodexGhostRepairBulkInventoryInput(
+                snapshotReference: request.snapshotReference, sourceLayoutIdentifier: source.sourceLayoutIdentifier,
+                sourceFingerprintHash: source.sourceFingerprintHash, manifestHash: source.manifestHash,
+                databases: source.databases, targets: source.targets, protectionEvidence: source.protectionEvidence,
+                authority: source.authority, allowReviewedResidue: source.allowReviewedResidue,
+                exactReadPresentThreadIDs: source.exactReadPresentThreadIDs)
+            do {
+                returnedInventory = try CodexGhostRepairBulkInventoryBuilder.build(input: input)
+            } catch {
+                return .unavailable(requestID: request.requestID, failure: .init(stage: .composition))
+            }
+        } else if requestBoundScanReference {
             returnedInventory = CodexGhostRepairBulkInventory(
                 snapshotReference: request.snapshotReference,
                 sourceLayoutIdentifier: inventory.sourceLayoutIdentifier,

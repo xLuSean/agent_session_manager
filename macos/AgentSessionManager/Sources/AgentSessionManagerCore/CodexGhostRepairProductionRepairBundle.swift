@@ -147,7 +147,7 @@ struct CodexGhostRepairProductionRepairBundle: Sendable {
 
     /// Derives only fixed URLs. No metadata read, file open or SQLite call is
     /// performed here, and the returned shape has no generic-path accessor.
-    func resolveForPreflight() throws -> Resolution {
+    func resolveForPreflight(profile: CodexGhostRepairSnapshotSourceProfile = .v149DesktopV32) throws -> Resolution {
         let codexHome = rootResolver().standardizedFileURL
         let liveCodexHome = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex", isDirectory: true)
@@ -179,7 +179,7 @@ struct CodexGhostRepairProductionRepairBundle: Sendable {
             CodexGhostRepairProductionRepairDatabase.allCases.map { database in
                 (
                     database,
-                    database.canonicalFile.sourceURL(
+                    profile.member(database.canonicalFile).sourceURL(
                         codexHomeURL: codexHome,
                         sqliteRootURL: sqliteRoot
                     )

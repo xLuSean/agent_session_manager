@@ -548,15 +548,12 @@ struct CodexGhostRepairSnapshotRecoveryReader:
               directory.st_mode & 0o7777 == 0o700 else {
             throw CodexGhostRepairError.recoveryRequired
         }
-        let allowed = Set(
-            CodexGhostRepairSnapshotCanonicalFile.allCases.map(\.rawValue)
-                + [
-                    CodexGhostRepairSnapshotPublishedFormat.manifestFileName,
-                    CodexGhostRepairSnapshotPublishedFormat.markerFileName,
-                ]
-        )
-        let names = try boundedNames(root, maximum: allowed.count)
-        guard Set(names).isSubset(of: allowed) else {
+        let records = [CodexGhostRepairSnapshotPublishedFormat.manifestFileName, CodexGhostRepairSnapshotPublishedFormat.markerFileName]
+        let names = try boundedNames(root, maximum: CodexGhostRepairSnapshotCanonicalFile.legacyFiles.count + records.count)
+        let observed = Set(names)
+        guard [CodexGhostRepairSnapshotCanonicalFile.legacyFiles, CodexGhostRepairSnapshotCanonicalFile.productionFiles].contains(where: { files in
+            observed.isSubset(of: Set(files.map(\.rawValue) + records))
+        }) else {
             throw CodexGhostRepairError.recoveryRequired
         }
         for name in names {

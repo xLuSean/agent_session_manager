@@ -15,7 +15,7 @@ struct CodexGhostRepairBulkOperationBoundBackupTransportCapabilities:
     Sendable
 {
     let fixedCanonicalFileCount =
-        CodexGhostRepairSnapshotCanonicalFile.allCases.count
+        CodexGhostRepairSnapshotCanonicalFile.legacyFiles.count
     let markerProtectedTestMirrorsOnly = true
     let manifestWrittenLast = true
     let exactOperationReadback = true
@@ -128,7 +128,7 @@ actor CodexGhostRepairBulkOperationBoundBackupTransport:
         try Self.requirePrivateDirectory(destination)
 
         for (file, evidence) in zip(
-            CodexGhostRepairSnapshotCanonicalFile.allCases,
+            source.profile.files,
             fingerprint.files
         ) where evidence.exists {
             try copy(

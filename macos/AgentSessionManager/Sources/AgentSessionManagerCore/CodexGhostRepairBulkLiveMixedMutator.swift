@@ -250,7 +250,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
             source: .production(profile: profile),
             profile: profile,
             gateSource: CodexGhostRepairSnapshotOperationalGateSource
-                .production(),
+                .production(profile: profile),
             backupReader: backupReader,
             fault: .none,
             afterFreshRecoveryInspectionForTesting: {}
@@ -313,6 +313,9 @@ actor CodexGhostRepairBulkLiveMixedMutator {
         attempt: CodexGhostRepairBulkLiveMixedAttempt
     ) async throws -> CodexGhostRepairCategoryABatchOutcome {
         try Self.validate(plan: plan, claim: claim, attempt: attempt)
+        guard plan.databaseContracts.first?.canonicalFileName == profile.member(.desktop).rawValue else {
+            return .notAttempted
+        }
         let backup = try await backupReader.readExactBackup(plan: plan)
         guard backup == plan.backup else {
             throw CodexGhostRepairError.backupFailed(
@@ -331,7 +334,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
         guard try await gateSource.ghostRepairExecutionGate().isClear else {
             return .notAttempted
         }
-        let resolution = try bundle.resolveForPreflight()
+        let resolution = try bundle.resolveForPreflight(profile: profile)
         do {
             try CodexGhostRepairFreshPinProtection.requireUnpinned(
                 plan.selectedThreadIDs, codexHomeURL: resolution.codexHomeURL
@@ -442,6 +445,9 @@ actor CodexGhostRepairBulkLiveMixedMutator {
         attempt: CodexGhostRepairBulkLiveMixedAttempt
     ) async throws -> CodexGhostRepairCategoryABatchOutcome {
         try Self.validate(plan: plan, claim: claim, attempt: attempt)
+        guard plan.databaseContracts.first?.canonicalFileName == profile.member(.desktop).rawValue else {
+            throw CodexGhostRepairError.recoveryRequired
+        }
         let backup = try await backupReader.readExactBackup(plan: plan)
         guard backup == plan.backup else {
             throw CodexGhostRepairError.backupFailed(
@@ -491,7 +497,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
         }
         let observed = try Self.inspect(
             selectedItems: plan.selectedItems,
-            resolution: bundle.resolveForPreflight()
+            resolution: bundle.resolveForPreflight(profile: profile)
         )
         guard profile.admits(databases: observed.databases),
               observed.databases.allSatisfy({
@@ -557,7 +563,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
         }
         let observed = try Self.inspect(
             selectedItems: plan.selectedItems,
-            resolution: bundle.resolveForPreflight()
+            resolution: bundle.resolveForPreflight(profile: profile)
         )
         let afterFingerprint = try source.fingerprint()
         try afterFingerprint.validateHash()
@@ -610,7 +616,12 @@ actor CodexGhostRepairBulkLiveMixedMutator {
             if let desktopDatabase { return try read(desktopDatabase) }
             return try CodexGhostRepairProductionSQLite.withReadOnly(at: resolution.databaseURL(for: .desktop), read: read)
         }
-        func readSummaries(_ read: (CodexGhostRepairProductionSQLite) throws -> CodexGhostRepairBulkLiveMixedObservedState) throws -> CodexGhostRepairBulkLiveMixedObservedState {
+        func readSummaries(_ read: (CodexGhostRepairProductionSQLite?) throws -> CodexGhostRepairBulkLiveMixedObservedState) throws -> CodexGhostRepairBulkLiveMixedObservedState {
+            let url = resolution.databaseURL(for: .summaries)
+            if try CodexGhostRepairSnapshotCanonicalFile.productionSummariesAbsent(at: url) {
+                guard summaryTransaction == nil else { throw CodexGhostRepairError.authorityDrift }
+                return try read(nil)
+            }
             if summaryTransaction != nil {
                 // The attached write transaction already owns this database.
                 // Its rows are read through that transaction below; this handle
@@ -636,7 +647,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
     private static func inspectHandles(
         selectedItems: [CodexGhostRepairBulkBackupBoundOperationItem],
         desktop: CodexGhostRepairProductionSQLite,
-        summaries: CodexGhostRepairProductionSQLite,
+        summaries: CodexGhostRepairProductionSQLite?,
         state: CodexGhostRepairProductionSQLite,
         history: CodexGhostRepairProductionSQLite,
         summaryTransaction: CodexGhostRepairProductionSQLite?
@@ -644,15 +655,14 @@ actor CodexGhostRepairBulkLiveMixedMutator {
         let handles: [
             (CodexGhostRepairSnapshotAnalysisDatabase,
              CodexGhostRepairProductionSQLite)
-        ] = [
-            (.desktop, desktop), (.summaries, summaries),
-            (.state, state), (.threadHistory, history),
-        ]
+        ] = [(.desktop, desktop)] + (summaries.map { [(.summaries, $0)] } ?? [])
+            + [(.state, state), (.threadHistory, history)]
         let databases = try CodexGhostRepairDatabaseSchemaProfile.liveEvidence(handles)
         let items = try selectedItems.map {
             try observedItem(
                 frozen: $0, desktop: desktop, summaries: summaryTransaction ?? summaries,
                 state: state, history: history,
+                productionCatalog: databases.first?.schemaProfileIdentifier == "desktop-v34-production",
                 summaryPrefix: summaryTransaction == nil ? "" : "reviewed_summaries."
             )
         }
@@ -708,10 +718,10 @@ actor CodexGhostRepairBulkLiveMixedMutator {
     private static func observedItem(
         frozen: CodexGhostRepairBulkBackupBoundOperationItem,
         desktop: CodexGhostRepairProductionSQLite,
-        summaries: CodexGhostRepairProductionSQLite,
+        summaries: CodexGhostRepairProductionSQLite?,
         state: CodexGhostRepairProductionSQLite,
         history: CodexGhostRepairProductionSQLite,
-        summaryPrefix: String
+        productionCatalog: Bool, summaryPrefix: String
     ) throws -> CodexGhostRepairBulkLiveMixedObservedItem {
         let catalog = try desktop.query(
             "SELECT * FROM local_thread_catalog "
@@ -743,16 +753,17 @@ actor CodexGhostRepairBulkLiveMixedMutator {
                 "M4f-17 target row multiplicity exceeded one."
             )
         }
-        let references = try count(
+        // Realtime rows also protect the target during the final transaction/readback.
+        let hasRealtime = try !history.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'thread_realtime_items'", maximumRows: 1).isEmpty
+        let realtimeReferences = try hasRealtime ? count(history, "SELECT count(*) FROM thread_realtime_items WHERE thread_id = ?", frozen.threadID) : 0
+        let activeChatTurns = productionCatalog ? try count(desktop, "SELECT count(*) FROM active_chat_turns WHERE thread_id = ?", frozen.threadID) : 0
+        let summaryCount = try summaries.map { try count($0, "SELECT count(*) FROM \(summaryPrefix)thread_turn_summaries WHERE thread_id = ?", frozen.threadID) } ?? 0
+        let references = realtimeReferences + activeChatTurns + summaryCount + (try count(
             desktop, "SELECT count(*) FROM inbox_items WHERE thread_id = ?",
             frozen.threadID
         ) + count(
             desktop,
             "SELECT count(*) FROM thread_timeline_ledger WHERE thread_id = ?",
-            frozen.threadID
-        ) + count(
-            summaries,
-            "SELECT count(*) FROM \(summaryPrefix)thread_turn_summaries WHERE thread_id = ?",
             frozen.threadID
         ) + count(
             state, "SELECT count(*) FROM threads WHERE id = ?", frozen.threadID
@@ -767,7 +778,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
             "SELECT count(*) FROM thread_history_projection_state "
                 + "WHERE thread_id = ?",
             frozen.threadID
-        )
+        ))
         let rawCatalogRow = catalog.first
         let rawAutomationRow = automation.first
         let rawDefinitionRow = definitions.first
@@ -795,7 +806,7 @@ actor CodexGhostRepairBulkLiveMixedMutator {
                 },
             referenceCount: references
         )
-        if frozen.reviewedResidue != nil {
+        if frozen.reviewedResidue != nil, let summaries {
             result.summaryRowDigests = try summaries.query(
                 "SELECT * FROM \(summaryPrefix)thread_turn_summaries WHERE thread_id = ? ORDER BY principal_key, host_key",
                 bindings: [.text(frozen.threadID)], maximumRows: 100
@@ -1019,20 +1030,12 @@ actor CodexGhostRepairBulkLiveMixedMutator {
         after: CodexGhostRepairSnapshotCanonicalFingerprint,
         plan: CodexGhostRepairBulkBackupBoundOperationPlan
     ) -> Bool {
-        var desktopFiles: Set<String> = [
-            CodexGhostRepairSnapshotCanonicalFile.desktop.rawValue,
-            CodexGhostRepairSnapshotCanonicalFile.desktopWAL.rawValue,
-            CodexGhostRepairSnapshotCanonicalFile.desktopSHM.rawValue,
-            CodexGhostRepairSnapshotCanonicalFile.desktopJournal.rawValue,
-        ]
+        guard let profile = CodexGhostRepairSnapshotSourceProfile.admitted(sourceLayoutIdentifier: after.sourceLayoutIdentifier) else { return false }
+        var writable: [CodexGhostRepairSnapshotCanonicalFile] = [.desktop, .desktopWAL, .desktopSHM, .desktopJournal]
         if plan.selectedItems.contains(where: { !($0.reviewedResidue?.summaryRowDigests.isEmpty ?? true) }) {
-            desktopFiles.formUnion([
-                CodexGhostRepairSnapshotCanonicalFile.summaries.rawValue,
-                CodexGhostRepairSnapshotCanonicalFile.summariesWAL.rawValue,
-                CodexGhostRepairSnapshotCanonicalFile.summariesSHM.rawValue,
-                CodexGhostRepairSnapshotCanonicalFile.summariesJournal.rawValue,
-            ])
+            writable += [.summaries, .summariesWAL, .summariesSHM, .summariesJournal]
         }
+        let desktopFiles = Set(writable.map { profile.member($0).rawValue })
         return backup.firstStableSourceMismatch(
             in: after,
             excluding: desktopFiles

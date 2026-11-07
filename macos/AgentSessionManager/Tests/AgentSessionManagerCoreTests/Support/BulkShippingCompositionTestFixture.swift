@@ -110,8 +110,9 @@ enum BulkShippingCompositionTestFixture {
         initiallyAbsentIndices: Set<Int> = [],
         profile: CodexGhostRepairSnapshotSourceProfile = .v149DesktopV32,
         runtimeVersion: String = "0.149.0",
-        reviewedResidue: Bool = false
+        reviewedResidue: Bool = false, omitProductionSummaries: Bool = false, managerDatabaseURL: URL? = nil
     ) throws -> Value {
+        precondition(!omitProductionSummaries || (profile == .v166Production && !reviewedResidue))
         precondition(alreadyAbsentIndices.allSatisfy((0..<itemCount).contains))
         precondition(initiallyAbsentIndices.allSatisfy { (0..<itemCount).contains($0) && $0.isMultiple(of: 2) })
         let parent = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -143,10 +144,10 @@ enum BulkShippingCompositionTestFixture {
         ).write(to: marker)
         XCTAssertEqual(chmod(marker.path, 0o600), 0)
 
-        let desktopURL = CodexGhostRepairSnapshotCanonicalFile.desktop.sourceURL(
+        let desktopURL = profile.member(.desktop).sourceURL(
             codexHomeURL: codexHome, sqliteRootURL: sqliteRoot
         )
-        let summariesURL = CodexGhostRepairSnapshotCanonicalFile.summaries.sourceURL(
+        let summariesURL = profile.member(.summaries).sourceURL(
             codexHomeURL: codexHome, sqliteRootURL: sqliteRoot
         )
         let stateURL = CodexGhostRepairSnapshotCanonicalFile.state.sourceURL(
@@ -155,22 +156,23 @@ enum BulkShippingCompositionTestFixture {
         let threadHistoryURL = CodexGhostRepairSnapshotCanonicalFile.threadHistory.sourceURL(
             codexHomeURL: codexHome, sqliteRootURL: sqliteRoot
         )
-        let legacyURL = CodexGhostRepairSnapshotCanonicalFile.history.sourceURL(
+        let legacyURL = profile.member(.history).sourceURL(
             codexHomeURL: codexHome, sqliteRootURL: sqliteRoot
         )
-        try createDesktop(
-            at: desktopURL,
-            itemCount: itemCount,
-            schema: desktopSchema,
-            extended: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile),
-            asyncStatus: profile == .v160DesktopV34Async
-        )
-        try createSideDatabase(
-            at: summariesURL, schema: 2,
-            tables: [reviewedResidue
+        if profile == .v166Production {
+            try createExtendedDesktop(at: desktopURL, itemCount: itemCount, profile: .desktopV34Production)
+        } else {
+            try createDesktop(
+                at: desktopURL, itemCount: itemCount, schema: desktopSchema,
+                extended: [.v156DesktopV34Extended, .v160DesktopV34Async, .v166DesktopV34Realtime].contains(profile),
+                asyncStatus: [.v160DesktopV34Async, .v166DesktopV34Realtime].contains(profile)
+            )
+        }
+        if !omitProductionSummaries {
+            try createSideDatabase(at: summariesURL, schema: 2, tables: [reviewedResidue
                 ? "CREATE TABLE thread_turn_summaries(principal_key TEXT, host_key TEXT, thread_id TEXT, summary TEXT)"
-                : "CREATE TABLE thread_turn_summaries(thread_id TEXT)"]
-        )
+                : "CREATE TABLE thread_turn_summaries(thread_id TEXT)"])
+        }
         try createSideDatabase(
             at: stateURL, schema: 0,
             tables: [
@@ -191,8 +193,9 @@ enum BulkShippingCompositionTestFixture {
             at: legacyURL, schema: 0,
             tables: ["CREATE TABLE legacy_sentinel(id INTEGER)"]
         )
-        if [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) {
+        if [.v156DesktopV34Extended, .v160DesktopV34Async, .v166DesktopV34Realtime, .v166Production].contains(profile) {
             for (database, url) in [(CodexGhostRepairSnapshotAnalysisDatabase.summaries, summariesURL), (.threadHistory, threadHistoryURL)] {
+                if database == .summaries && omitProductionSummaries { continue }
                 for table in CodexGhostRepairReferencedTables.byDatabase[database, default: []] {
                     try execute("DROP TABLE \(table.table)", at: url)
                     var columns = table.columns.map { "\($0) TEXT" }
@@ -203,7 +206,8 @@ enum BulkShippingCompositionTestFixture {
                 }
             }
         }
-        for url in [desktopURL, summariesURL, stateURL, threadHistoryURL, legacyURL] {
+        if [.v166DesktopV34Realtime, .v166Production].contains(profile) { try CodexRealtimeHistoryTestFixture.replace(at: threadHistoryURL) }
+        for url in [desktopURL, summariesURL, stateURL, threadHistoryURL, legacyURL] where !omitProductionSummaries || url != summariesURL {
             XCTAssertEqual(chmod(url.path, 0o644), 0)
         }
 
@@ -232,7 +236,7 @@ enum BulkShippingCompositionTestFixture {
             generatedAtMilliseconds: 1_000,
             expiresAtMilliseconds: 10_000
         )
-        let managerStateURL = parent.appendingPathComponent(
+        let managerStateURL = managerDatabaseURL ?? parent.appendingPathComponent(
             "manager-state.sqlite"
         )
         let managerStore = try SQLiteStateStore(databaseURL: managerStateURL)
@@ -358,9 +362,7 @@ enum BulkShippingCompositionTestFixture {
 
         if reviewedResidue {
             precondition(itemCount == 2 && absentIndices.isEmpty)
-            if ![CodexGhostRepairSnapshotSourceProfile.v156DesktopV34Extended.identifier, CodexGhostRepairSnapshotSourceProfile.v160DesktopV34Async.identifier].contains(profile.identifier) {
-                try execute("UPDATE automations SET status = 'PAUSED' WHERE id = 'automation-1'", at: desktopURL)
-            }
+            try execute("UPDATE automations SET status = 'PAUSED' WHERE id = 'automation-1'", at: desktopURL)
             for index in 0...2 {
                 try execute("INSERT INTO thread_turn_summaries(principal_key,host_key,thread_id,summary) VALUES ('principal','local','\(identifier(index))','summary-\(index)')", at: summariesURL)
             }
@@ -375,7 +377,8 @@ enum BulkShippingCompositionTestFixture {
                     automationStableFieldsDigests: target.automationStableFieldsDigests,
                     automationDefinitionRowDigests: target.automationDefinitionRowDigests,
                     references: .init(inbox: 0, timeline: 0, summaries: 1, canonicalState: 0,
-                                      threadTurns: 0, threadItems: 0, historyProjection: 0),
+                                      threadTurns: 0, threadItems: 0, historyProjection: 0, realtimeItems: [.v166DesktopV34Realtime, .v166Production].contains(profile) ? 0 : nil,
+                    activeChatTurns: profile == .v166Production ? 0 : nil),
                     rowContract: index == 1 ? .unsupported : .categoryAEligible
                 )
                 value.summaryRowDigests = try summaryDB.query(
@@ -455,7 +458,7 @@ enum BulkShippingCompositionTestFixture {
             selectedItems: frozenSource.selectedItems.map {
                 CodexGhostRepairBulkBackupBoundOperationItem(frozen: $0)
             },
-            resolution: bundle.resolveForPreflight()
+            resolution: bundle.resolveForPreflight(profile: profile)
         )
         let alreadyAbsentThreadIDs = absentIndices.sorted().map(
             identifier
@@ -555,7 +558,8 @@ enum BulkShippingCompositionTestFixture {
                     threadID: threadID, catalogRowDigests: [], automationRunRowDigests: [],
                     automationStableFieldsDigests: [], automationDefinitionRowDigests: [],
                     references: .init(inbox: 0, timeline: 0, summaries: 0, canonicalState: 0,
-                                      threadTurns: 0, threadItems: 0, historyProjection: 0),
+                                      threadTurns: 0, threadItems: 0, historyProjection: 0, realtimeItems: [.v166DesktopV34Realtime, .v166Production].contains(profile) ? 0 : nil,
+                    activeChatTurns: profile == .v166Production ? 0 : nil),
                     rowContract: .unsupported
                 )
             }
@@ -573,7 +577,8 @@ enum BulkShippingCompositionTestFixture {
                     references: .init(
                         inbox: 0, timeline: 0, summaries: 0,
                         canonicalState: 0, threadTurns: 0,
-                        threadItems: 0, historyProjection: 0
+                        threadItems: 0, historyProjection: 0, realtimeItems: [.v166DesktopV34Realtime, .v166Production].contains(profile) ? 0 : nil,
+                    activeChatTurns: profile == .v166Production ? 0 : nil
                     ),
                     rowContract: .categoryAEligible
                 )
@@ -604,7 +609,8 @@ enum BulkShippingCompositionTestFixture {
                 references: .init(
                     inbox: 0, timeline: 0, summaries: 0,
                     canonicalState: 0, threadTurns: 0,
-                    threadItems: 0, historyProjection: 0
+                    threadItems: 0, historyProjection: 0, realtimeItems: [.v166DesktopV34Realtime, .v166Production].contains(profile) ? 0 : nil,
+                    activeChatTurns: profile == .v166Production ? 0 : nil
                 ),
                 rowContract: .categoryBEligible
             )
@@ -617,17 +623,17 @@ enum BulkShippingCompositionTestFixture {
             databases: [
                 .init(database: .desktop, schemaVersion: desktopSchema,
                       integrityCheckPassed: true, foreignKeyViolationCount: 0,
-                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
+                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async, .v166DesktopV34Realtime, .v166Production].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
                 .init(database: .summaries, schemaVersion: 2,
                       integrityCheckPassed: true, foreignKeyViolationCount: 0,
-                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
+                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async, .v166DesktopV34Realtime, .v166Production].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
                 .init(database: .state, schemaVersion: 0,
                       integrityCheckPassed: true, foreignKeyViolationCount: 0,
-                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
+                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async, .v166DesktopV34Realtime, .v166Production].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
                 .init(database: .threadHistory, schemaVersion: 0,
                       integrityCheckPassed: true, foreignKeyViolationCount: 0,
-                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
-            ],
+                      schemaProfileIdentifier: [.v156DesktopV34Extended, .v160DesktopV34Async, .v166DesktopV34Realtime, .v166Production].contains(profile) ? profile.databaseSchemaProfileIdentifier : nil),
+            ].filter { $0.database != .summaries || fingerprint.files.contains { $0.fileName == profile.member(.summaries).rawValue && $0.exists } },
             targets: targets,
             protectionEvidence: targets.map {
                 .init(

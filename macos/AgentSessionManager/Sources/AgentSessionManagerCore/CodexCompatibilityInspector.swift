@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import CSQLite3
 import Darwin
@@ -38,9 +39,12 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
     }
 
     static func installedDesktopCandidates() -> [URL] {
+        let running = Set(NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex")
+            .compactMap { $0.bundleURL?.standardizedFileURL })
+        if running.count > 1 { return [] }
         let registered = LSCopyApplicationURLsForBundleIdentifier("com.openai.codex" as CFString, nil)?
             .takeRetainedValue() as? [URL] ?? []
-        let candidates = registered + [
+        let candidates = Array(running) + registered + [
             URL(fileURLWithPath: "/Applications/Codex.app"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Codex.app"),
             URL(fileURLWithPath: "/Applications/ChatGPT.app"),
@@ -201,7 +205,8 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
         let desktop = before.desktopURL.flatMap { try? runtime($0, work: work) }
         let schemas = work.appendingPathComponent("schema")
         _ = try command(request.providerExecutable, arguments: ["app-server", "generate-json-schema", "--out", schemas.path], work: work)
-        let contract = try CodexCompatibilitySchema.read(directory: schemas)
+        let contract = try CodexCompatibilitySchema.read(directory: schemas,
+            requiresSections: CodexModernThreadMetadata.required(runtimeVersion: provider.version))
         let after = try environment(request)
         try Task.checkCancellation()
         try requireSameEnvironment(before, after)
@@ -368,17 +373,29 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
         if let home = request.codexHome {
             // Schema definitions only; never SELECT from a session/automation table.
             for database in CodexGhostRepairSnapshotAnalysisDatabase.allCases {
-                let name = database.canonicalFile.rawValue
-                let url = database.canonicalFile.sourceURL(codexHomeURL: home, sqliteRootURL: home.appendingPathComponent("sqlite"))
+                let production = desktopApplication?.usesProductionCatalog == true
+                let file = production ? database.canonicalFile.productionMember : database.canonicalFile
+                let name = file.rawValue
+                let url = file.sourceURL(codexHomeURL: home, sqliteRootURL: home.appendingPathComponent("sqlite"))
                 let started = Date()
                 var diagnostic: [String: String] = ["database": name, "stage": "databaseMetadata"]
                 do {
+                    if try CodexGhostRepairSnapshotCanonicalFile.productionSummariesAbsent(at: url) {
+                        var check = CodexCompatibilityDatabaseCheck(database: database, issue: nil)
+                        check.productionCatalog = true
+                        check.optionalStoreAbsent = true
+                        databaseChecks.append(check)
+                        parts.append(name + ":absent")
+                        continue
+                    }
                     let metadata = try CodexCompatibilityDatabase.metadata(at: url)
-                    guard let check = metadata.check else { throw CheckError.unavailable }
+                    guard var check = metadata.check else { throw CheckError.unavailable }
+                    if production { check.productionCatalog = true }
                     parts += [name, metadata.fingerprint]
                     databaseChecks.append(check)
                     if database == .desktop {
-                        desktopProfile = metadata.desktopProfile
+                        let productionSchema = metadata.desktopProfile == CodexGhostRepairDatabaseSchemaProfile.desktopV34Production.identifier
+                        desktopProfile = production == productionSchema ? metadata.desktopProfile : nil
                     }
                     diagnostic["outcome"] = check.issue?.rawValue ?? "passed"
                     diagnostic["read_method"] = metadata.readMethod
@@ -386,6 +403,7 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
                     parts.append("\(name):unavailable")
                     let failure = error as? CodexCompatibilityReadFailure
                     var check = CodexCompatibilityDatabaseCheck(database: database, issue: .unavailable)
+                    if production { check.productionCatalog = true }
                     check.readFailure = failure
                     databaseChecks.append(check)
                     metadataAvailable = false
@@ -406,6 +424,11 @@ public actor CodexCompatibilityInspector: CodexCompatibilityInspecting {
             }
         } else {
             databaseChecks = CodexGhostRepairSnapshotAnalysisDatabase.allCases.map { .init(database: $0, issue: .unavailable) }
+        }
+        if desktopProfile == CodexGhostRepairDatabaseSchemaProfile.desktopV34Async.identifier,
+           databaseChecks.contains(where: { $0.database == .threadHistory && $0.issue == nil
+               && $0.schemaProfileIdentifier == CodexThreadHistoryContract.profileIdentifier }) {
+            desktopProfile = CodexGhostRepairDatabaseSchemaProfile.desktopV34Realtime.identifier
         }
         return .init(fingerprint: Self.hash(Data(parts.joined(separator: "\n").utf8)),
                      desktopURL: desktopURL, desktopProfile: desktopProfile, desktopMetadataAvailable: metadataAvailable,

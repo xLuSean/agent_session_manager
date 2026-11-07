@@ -70,7 +70,7 @@ final class CodexGhostRepairSnapshotQuarantinePublisherTests: XCTestCase {
         )
         let publishedRoot = fixture.publishedRoot(snapshotID)
         let names = try FileManager.default.contentsOfDirectory(atPath: publishedRoot.path)
-        XCTAssertEqual(names.count, CodexGhostRepairSnapshotCanonicalFile.allCases.count + 2)
+        XCTAssertEqual(names.count, CodexGhostRepairSnapshotCanonicalFile.legacyFiles.count + 2)
         XCTAssertGreaterThan(names.count, 16)
 
         let freshPublisher = fixture.makePublisher()
@@ -471,7 +471,7 @@ final class CodexGhostRepairSnapshotQuarantinePublisherTests: XCTestCase {
                 CodexGhostRepairSnapshotCanonicalSource.testMirrorMarkerFileName
             )
         )
-        for file in CodexGhostRepairSnapshotCanonicalFile.allCases
+        for file in CodexGhostRepairSnapshotCanonicalFile.legacyFiles
             where file.isRequiredDatabase || includeAllCanonicalMembers {
             try PublisherWritePrivate(
                 Data("M1b-6 \(file.rawValue)\n".utf8),

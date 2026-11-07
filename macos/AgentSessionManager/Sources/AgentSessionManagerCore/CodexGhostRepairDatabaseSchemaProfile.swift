@@ -85,32 +85,59 @@ struct CodexGhostRepairDatabaseSchemaProfile: Equatable, Sendable {
                          exactColumns: table.exactColumns, customIndexes: table.customIndexes)
         })
 
-    static let admittedProfiles = [desktopV32, desktopV33, desktopV34, desktopV34Extended, desktopV34Async]
+    /// Same Desktop tables, independently versioned rooted/realtime history.
+    static let desktopV34Realtime = Self(identifier: "desktop-v34-realtime",
+        databaseVersions: desktopV34Async.databaseVersions, desktopTables: desktopV34Async.desktopTables)
+
+    static let desktopV34Production = Self(identifier: "desktop-v34-production",
+        databaseVersions: desktopV34Realtime.databaseVersions,
+        desktopTables: desktopV34Async.desktopTables + [
+            .init(table: "active_chat_turns", columns: [
+                column("profile", "TEXT", notNull: true, primaryKey: 1),
+                column("account_id", "TEXT", notNull: true, primaryKey: 2),
+                column("user_id", "TEXT", notNull: true, primaryKey: 3),
+                column("thread_id", "TEXT", notNull: true, primaryKey: 4),
+                column("launch_id", "TEXT", notNull: true),
+                column("observed_at_ms", "INTEGER", notNull: true),
+            ], exactColumns: true, customIndexes: [])
+        ])
+
+    static let admittedProfiles = [desktopV34Production, desktopV32, desktopV33, desktopV34, desktopV34Extended, desktopV34Async, desktopV34Realtime]
     static let inspectionProfiles = admittedProfiles
 
     // Old persisted evidence retains its encoding/hash. The same-version
     // extension always requires the explicit marker from a full schema read.
     var evidenceIdentifier: String? { timedHistoryRequired ? identifier : nil }
-    var timedHistoryRequired: Bool { self == .desktopV34Extended || self == .desktopV34Async }
+    var timedHistoryRequired: Bool { self == .desktopV34Extended || self == .desktopV34Async || realtimeHistoryRequired }
+    var realtimeHistoryRequired: Bool { self == .desktopV34Realtime || self == .desktopV34Production }
+    var desktopDefinitionIdentifier: String { self == .desktopV34Realtime ? Self.desktopV34Async.identifier : identifier }
+    var historyProfileIdentifier: String {
+        realtimeHistoryRequired ? CodexThreadHistoryContract.profileIdentifier
+            : timedHistoryRequired ? "thread-history-timed" : "thread-history-legacy"
+    }
+
+    static func combining(_ desktop: Self, realtimeHistory: Bool) -> Self {
+        desktop == .desktopV34Async && realtimeHistory ? .desktopV34Realtime : desktop
+    }
 
     static func admitted(desktopUserVersion: Int32)
         -> CodexGhostRepairDatabaseSchemaProfile?
     {
         admittedProfiles.first {
-            $0.databaseVersions[.desktop] == desktopUserVersion
+            $0 != .desktopV34Production && $0.databaseVersions[.desktop] == desktopUserVersion
         }
     }
 
     static func admitted(
         databases: [CodexGhostRepairSnapshotAnalysisDatabaseEvidence]
     ) -> CodexGhostRepairDatabaseSchemaProfile? {
-        guard databases.map(\.database)
-                == CodexGhostRepairSnapshotAnalysisDatabase.allCases,
-              let desktop = databases.first(where: { $0.database == .desktop }),
+        guard let desktop = databases.first(where: { $0.database == .desktop }),
               let profile = admittedProfiles.first(where: {
                   $0.databaseVersions[.desktop] == desktop.schemaVersion
                       && $0.evidenceIdentifier == desktop.schemaProfileIdentifier
               }),
+              (databases.map(\.database) == CodexGhostRepairSnapshotAnalysisDatabase.allCases
+                || (profile == .desktopV34Production && databases.map(\.database) == [.desktop, .state, .threadHistory])),
               databases.allSatisfy({ evidence in
                   evidence.schemaProfileIdentifier == profile.evidenceIdentifier &&
                   profile.databaseVersions[evidence.database]
@@ -384,7 +411,15 @@ extension CodexGhostRepairDatabaseSchemaProfile {
         let columns = try desktop.query("PRAGMA table_info('local_thread_catalog')", maximumRows: 128)
         let extended = columns.contains { $0.value(named: "name") == .text("trial_conversation_type") }
         let asyncStatus = columns.contains { $0.value(named: "name") == .text("chatgpt_async_status") }
-        let profile: Self? = extended ? (asyncStatus ? .desktopV34Async : .desktopV34Extended) : nil
+        var profile: Self? = extended ? (asyncStatus ? .desktopV34Async : .desktopV34Extended) : nil
+        if asyncStatus, try !desktop.query("SELECT name FROM sqlite_master WHERE type='table' AND name='active_chat_turns'", maximumRows: 1).isEmpty {
+            profile = .desktopV34Production
+        }
+        if let current = profile, let history = handles.first(where: { $0.0 == .threadHistory })?.1 {
+            profile = Self.combining(current, realtimeHistory: try CodexThreadHistoryContract.isPresent {
+                try metadataRows(history, sql: $0.sql)
+            })
+        }
         return try handles.map { database, handle in
             let version = try handle.schemaVersion()
             if extended {
@@ -402,8 +437,8 @@ extension CodexGhostRepairDatabaseSchemaProfile {
                     }
                 }
                 guard result.issue == nil,
-                      database != .desktop || result.profile == profile?.identifier,
-                      database != .threadHistory || result.profile == "thread-history-timed" else {
+                      database != .desktop || result.profile == profile?.desktopDefinitionIdentifier,
+                      database != .threadHistory || result.profile == profile?.historyProfileIdentifier else {
                     throw CodexGhostRepairError.invalidDatabaseContract("Extended Desktop schema changed before cleanup.")
                 }
             }
@@ -411,6 +446,19 @@ extension CodexGhostRepairDatabaseSchemaProfile {
                          integrityCheckPassed: try handle.integrityPassed(),
                          foreignKeyViolationCount: try handle.foreignKeyViolationCount(),
                          schemaProfileIdentifier: profile?.evidenceIdentifier)
+        }
+    }
+
+    private static func metadataRows(_ handle: CodexGhostRepairProductionSQLite, sql: String) throws -> [[String?]] {
+        try handle.query(sql, maximumRows: 1_024).map { row in
+            try row.fields.map { field in
+                switch field.value {
+                case .null: return nil
+                case let .text(value): return value
+                case let .integer(value): return String(value)
+                default: throw CodexGhostRepairError.invalidDatabaseContract("Invalid schema metadata.")
+                }
+            }
         }
     }
 }

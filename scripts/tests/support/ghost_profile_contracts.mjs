@@ -112,10 +112,10 @@ export function analyzeSnapshotProfiles(sources) {
       && sources.canonicalSource.includes("profile.validates(files: files)"),
     fixedTwentyMembersPreserved:
       sources.canonicalSource.match(
-        /^    case \w+ = /gm,
+        /^    case (?!production)\w+ = /gm,
       )?.length === 20
       && sources.canonicalSource.includes(
-        "files = CodexGhostRepairSnapshotCanonicalFile.allCases",
+        "static let productionFiles = legacyFiles.map(\\.productionMember)",
       ),
     publisherPreservesBoundProfile:
       sources.publisher.includes("source.profile.files")

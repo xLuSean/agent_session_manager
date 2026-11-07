@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 
 public struct CodexGhostRepairOperationalGateConfiguration: Hashable, Sendable {
+    private let productionCatalog: Bool
     public let desktopDatabaseURL: URL
     public let summariesDatabaseURL: URL
     public let historyDatabaseURL: URL
@@ -11,21 +12,22 @@ public struct CodexGhostRepairOperationalGateConfiguration: Hashable, Sendable {
     public let fixedCapacityHeadroomBytes: UInt64
 
     public init(
-        codexHomeURL: URL,
+        codexHomeURL: URL, productionCatalog: Bool = false,
         backupVolumeProbeURL: URL,
         fixedCapacityHeadroomBytes: UInt64 = 64 * 1_024 * 1_024
     ) {
+        self.productionCatalog = productionCatalog
         let sqliteDirectory = codexHomeURL.appendingPathComponent("sqlite", isDirectory: true)
         self.desktopDatabaseURL = sqliteDirectory.appendingPathComponent(
-            "codex-dev.db",
+            productionCatalog ? "codex.db" : "codex-dev.db",
             isDirectory: false
         )
         self.summariesDatabaseURL = sqliteDirectory.appendingPathComponent(
-            "codex-thread-summaries-dev.db",
+            productionCatalog ? "codex-thread-summaries.db" : "codex-thread-summaries-dev.db",
             isDirectory: false
         )
         self.historyDatabaseURL = sqliteDirectory.appendingPathComponent(
-            "codex-history-snapshots-dev.db",
+            productionCatalog ? "codex-history-snapshots.db" : "codex-history-snapshots-dev.db",
             isDirectory: false
         )
         self.stateDatabaseURL = codexHomeURL.appendingPathComponent(
@@ -49,7 +51,7 @@ public struct CodexGhostRepairOperationalGateConfiguration: Hashable, Sendable {
     fileprivate var databaseEntries: [DatabaseEntry] {
         [
             DatabaseEntry(role: .desktop, url: desktopDatabaseURL, required: true),
-            DatabaseEntry(role: .summaries, url: summariesDatabaseURL, required: true),
+            DatabaseEntry(role: .summaries, url: summariesDatabaseURL, required: !productionCatalog),
             DatabaseEntry(role: .legacyHistory, url: historyDatabaseURL, required: false),
             DatabaseEntry(role: .state, url: stateDatabaseURL, required: true),
             DatabaseEntry(
@@ -425,7 +427,11 @@ public actor CodexGhostRepairMacOSOperationalGateSource:
                 databaseRole: database.role,
                 processEntries: processEntriesByIdentifier
             )
-            openHandleOwnerEvidence.append(contentsOf: owners)
+            openHandleOwnerEvidence.append(contentsOf: owners.map { owner in
+                var owner = owner
+                if configuration.desktopDatabaseURL.lastPathComponent == "codex.db" { owner.productionCatalog = true }
+                return owner
+            })
             handleCounts[database.role] = owners.reduce(0) {
                 $0 + $1.fileDescriptorCount
             }

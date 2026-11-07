@@ -35,6 +35,7 @@ public enum ProtectionEvidenceVerdict: String, Codable, Hashable, Sendable {
 public enum ProtectionEvidenceSource: String, Codable, Hashable, Sendable {
     case fixtureProvider
     case codexThreadListPin
+    case codexThreadSection
     case codexDesktopPinnedThreadIDs
     case codexThreadListStatus
     case codexCompleteDescendantGraph
@@ -44,6 +45,7 @@ public enum ProtectionEvidenceSource: String, Codable, Hashable, Sendable {
         switch self {
         case .fixtureProvider: "Fixture provider"
         case .codexThreadListPin: "thread/list isPinned"
+        case .codexThreadSection: "Codex conversation section"
         case .codexDesktopPinnedThreadIDs: "Codex Desktop pinned-thread-ids"
         case .codexThreadListStatus: "thread/list runtime status"
         case .codexCompleteDescendantGraph: "Complete thread/list descendant graph"
@@ -61,6 +63,7 @@ public struct ProtectionEvidence: Identifiable, Codable, Hashable, Sendable {
     public let explanation: String
 
     public var id: ProtectionEvidenceKind { kind }
+    public var label: String { kind == .pinned && source == .codexThreadSection ? "Section protection" : kind.label }
 
     public init(
         kind: ProtectionEvidenceKind,
@@ -94,9 +97,13 @@ public enum ProtectionEvidenceBuilder {
                 kind: .pinned,
                 value: protection.isPinned,
                 known: protection.isPinnedKnown,
-                knownSource: .codexDesktopPinnedThreadIDs,
-                knownExplanation: "The persisted pin value was resolved from a consistent Codex Desktop pinned-thread-ids snapshot.",
-                unavailableExplanation: "Neither Codex Desktop pinned-thread-ids nor thread/list supplied a complete, non-conflicting pin value."
+                knownSource: protection.usesSectionProtection == true ? .codexThreadSection : .codexDesktopPinnedThreadIDs,
+                knownExplanation: protection.usesSectionProtection == true
+                    ? "All conversations assigned to a Codex section are protected. Only an explicit, consistent empty section can clear this protection."
+                    : "The persisted pin value was resolved from a consistent Codex Desktop pinned-thread-ids snapshot.",
+                unavailableExplanation: protection.usesSectionProtection == true
+                    ? "Codex did not supply complete, consistent section membership. Legacy pin settings cannot clear this protection."
+                    : "Neither Codex Desktop pinned-thread-ids nor thread/list supplied a complete, non-conflicting pin value."
             ),
             positiveOnlyItem(
                 kind: .running,

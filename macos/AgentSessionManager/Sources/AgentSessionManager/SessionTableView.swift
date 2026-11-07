@@ -372,8 +372,9 @@ private struct SessionIdentityCell: View {
                         .fontWeight(.medium)
                         .lineLimit(1)
                     if session.protection.isPinned {
-                        Image(systemName: "pin.fill")
+                        Image(systemName: session.protection.usesSectionProtection == true ? "square.grid.2x2.fill" : "pin.fill")
                             .foregroundStyle(.orange)
+                            .help(session.protection.pinLabel)
                     }
                 }
                 Text(session.nativeID)

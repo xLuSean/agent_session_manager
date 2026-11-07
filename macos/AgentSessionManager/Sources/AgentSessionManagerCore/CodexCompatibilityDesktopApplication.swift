@@ -36,6 +36,23 @@ public struct CodexCompatibilityDesktopApplication: Codable, Equatable, Sendable
     public let version: String
     public let build: String
     public let fingerprint: String
+
+    // This signed Desktop build opens the production catalog even when its older development catalog remains installed.
+    var usesProductionCatalog: Bool { Self.usesProductionCatalog(version: version, build: build) }
+
+    public static var installedUsesProductionCatalog: Bool {
+        for app in CodexCompatibilityInspector.installedDesktopCandidates() {
+            guard let bundle = Bundle(url: app), bundle.bundleIdentifier == "com.openai.codex" else { continue }
+            guard let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+                  let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String else { return false }
+            return usesProductionCatalog(version: version, build: build)
+        }
+        return false
+    }
+
+    static func usesProductionCatalog(version: String, build: String) -> Bool {
+        version == "26.1027.61615" && build == "24141"
+    }
 }
 
 enum CodexCompatibilityDesktopApplicationReader {
